@@ -181,4 +181,374 @@ class TelegramClientManager:
             return False
         except Exception as e:
             print(f"❌ Reconnect error: {e}")
-            return False
+                # ===== 3.1.4. HEARTBEAT =====
+    
+    @classmethod
+    async def heartbeat_loop(cls, stop_event: asyncio.Event = None):
+        """
+        Проверяет соединение каждые 5 минут.
+        
+        Если соединение живо — логирует успех.
+        Если 3 ошибки подряд — запускает auto_reconnect().
+        """
+        consecutive_failures = 0
+        max_failures = 3
+        
+        print("💓 Heartbeat loop started (every 300s)")
+        
+        while True:
+            if stop_event and stop_event.is_set():
+                print("💓 Heartbeat stopped")
+                break
+            
+            await asyncio.sleep(300)  # 5 минут
+            
+            try:
+                client = await cls.get_instance()
+                if not client.is_connected():
+                    raise ConnectionError("Not connected")
+                
+                me = await client.get_me()
+                consecutive_failures = 0
+                print(f"💓 Heartbeat OK: user_id={me.id}")
+                
+            except Exception as e:
+                consecutive_failures += 1
+                print(f"⚠️ Heartbeat failed ({consecutive_failures}/{max_failures}): {e}")
+                
+                if consecutive_failures >= max_failures:
+                    print("🔄 Starting auto-reconnect...")
+                    success = await cls.reconnect()
+                    if success:
+                        consecutive_failures = 0
+                    else:
+                        print("❌ Reconnect failed, will retry next heartbeat")
+                        consecutive_failures = 0  # Сбрасываем, пробуем дальше
+    
+    # ===== 3.1.5. GET MESSAGES FAST =====
+    
+    @staticmethod
+    async def get_messages_fast(
+        client: TelegramClient,
+        channel_id: str,
+        limit: int = 50,
+        offset_id: int = None
+    ):
+        """
+        Быстрый сбор сообщений из канала без оверхеда авторизации.
+        
+        Args:
+            client: Экземпляр TelegramClient (из get_instance())
+            channel_id: ID канала (например, '@forumrostov')
+            limit: Сколько сообщений собрать (макс 50)
+            offset_id: С какого ID начать (None = самые новые)
+        
+        Returns:
+            Список сообщений или пустой список при ошибке.
+        """
+        try:
+            messages = await client.get_messages(
+                channel_id,
+                limit=limit,
+                offset_id=offset_id
+            )
+            return messages
+        except FloodWaitError as e:
+            # Пробрасываем выше для обработки в main loop
+            raise e
+        except Exception as e:
+            print(f"❌ Error fetching from {channel_id}: {e}")
+            return []
+    
+    # ===== 3.1.6. FLOODWAIT HANDLER =====
+    
+    @staticmethod
+    async def handle_floodwait(error: FloodWaitError):
+        """
+        Обрабатывает FloodWait от Telegram.
+        
+        ЗОЛОТОЕ ПРАВИЛО: уважать wait_seconds от Telegram.
+        Добавляем jitter (0-30%), чтобы несколько экземпляров KRAKEN
+        не начали стучаться одновременно.
+        
+        Returns:
+            True если нужно пропустить следующий цикл сбора.
+        """
+        import random
+        wait_seconds = error.seconds
+        jitter = random.uniform(0, wait_seconds * 0.3)
+        delay = wait_seconds + jitter
+        
+        print(f"🌊 FloodWait: Telegram says wait {wait_seconds}s, "
+              f"waiting {delay:.1f}s (with jitter)")
+        await asyncio.sleep(delay)
+        
+        # Если ждали больше 30 секунд — пропускаем следующий цикл
+        return wait_seconds > 30
+    
+    # ===== 3.1.8. AUTH REVOKED HANDLER =====
+    
+    @staticmethod
+    async def handle_auth_revoked():
+        """
+        Обрабатывает фатальную ошибку: сессия умерла (AuthKeyInvalid).
+        
+        Отправляет BEACON FATAL и завершает процесс с exit(1).
+        Контейнер упадёт, Docker перезапустит его.
+        """
+        print("💀 FATAL: Session dead (AuthKeyInvalid)")
+        
+        # Отправляем алерт в Beacon (если доступен)
+        try:
+            from src.clients.bot_client import BotClient
+            bot = BotClient()
+            await bot.send_alert(
+                severity="FATAL",
+                error_type="AUTH_REVOKED",
+                message="Session revoked, need manual bootstrap. "
+                        "Run bootstrap_session_v3.py on server."
+            )
+        except Exception as e:
+            print(f"⚠️ Could not send Beacon alert: {e}")
+        
+        print("🛑 Exiting with code 1")
+        sys.exit(1)
+
+
+# ===== 3.1.3 & 3.1.9. LIFESPAN MANAGER =====
+
+class TelegramLifespan:
+    """
+    Менеджер жизненного цикла Telegram-клиента.
+    
+    Используется в FastAPI lifespan или в main.py как контекстный менеджер.
+    
+    Пример использования:
+        async with TelegramLifespan() as client:
+            # работаем с client
+            pass
+        # здесь client уже disconnect'нут
+    """
+    
+    def __init__(self):
+        self.client: TelegramClient | None = None
+        self._heartbeat_task: asyncio.Task | None = None
+        self._stop_event: asyncio.Event = asyncio.Event()
+    
+    async def __aenter__(self) -> TelegramClient:
+        """STARTUP: вызывается ОДИН раз при старте."""
+        print("🚀 TelegramLifespan STARTUP")
+        
+        # Инициализируем клиент (connect + start)
+        self.client = await TelegramClientManager.init_client()
+        
+        # Запускаем heartbeat в фоне
+        self._heartbeat_task = asyncio.create_task(
+            TelegramClientManager.heartbeat_loop(self._stop_event)
+        )
+        
+        return self.client
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """SHUTDOWN: вызывается ОДИН раз при остановке."""
+        print("🛑 TelegramLifespan SHUTDOWN")
+        
+        # Останавливаем heartbeat
+        self._stop_event.set()
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Отключаем клиент
+        await TelegramClientManager.disconnect()
+        
+        print("✅ TelegramLifespan SHUTDOWN complete")
+        return False
+    # ===== 3.1.4. HEARTBEAT =====
+    
+    @classmethod
+    async def heartbeat_loop(cls, stop_event: asyncio.Event = None):
+        """
+        Проверяет соединение каждые 5 минут.
+        
+        Если соединение живо — логирует успех.
+        Если 3 ошибки подряд — запускает auto_reconnect().
+        """
+        consecutive_failures = 0
+        max_failures = 3
+        
+        print("💓 Heartbeat loop started (every 300s)")
+        
+        while True:
+            if stop_event and stop_event.is_set():
+                print("💓 Heartbeat stopped")
+                break
+            
+            await asyncio.sleep(300)  # 5 минут
+            
+            try:
+                client = await cls.get_instance()
+                if not client.is_connected():
+                    raise ConnectionError("Not connected")
+                
+                me = await client.get_me()
+                consecutive_failures = 0
+                print(f"💓 Heartbeat OK: user_id={me.id}")
+                
+            except Exception as e:
+                consecutive_failures += 1
+                print(f"⚠️ Heartbeat failed ({consecutive_failures}/{max_failures}): {e}")
+                
+                if consecutive_failures >= max_failures:
+                    print("🔄 Starting auto-reconnect...")
+                    success = await cls.reconnect()
+                    if success:
+                        consecutive_failures = 0
+                    else:
+                        print("❌ Reconnect failed, will retry next heartbeat")
+                        consecutive_failures = 0  # Сбрасываем, пробуем дальше
+    
+    # ===== 3.1.5. GET MESSAGES FAST =====
+    
+    @staticmethod
+    async def get_messages_fast(
+        client: TelegramClient,
+        channel_id: str,
+        limit: int = 50,
+        offset_id: int = None
+    ):
+        """
+        Быстрый сбор сообщений из канала без оверхеда авторизации.
+        
+        Args:
+            client: Экземпляр TelegramClient (из get_instance())
+            channel_id: ID канала (например, '@forumrostov')
+            limit: Сколько сообщений собрать (макс 50)
+            offset_id: С какого ID начать (None = самые новые)
+        
+        Returns:
+            Список сообщений или пустой список при ошибке.
+        """
+        try:
+            messages = await client.get_messages(
+                channel_id,
+                limit=limit,
+                offset_id=offset_id
+            )
+            return messages
+        except FloodWaitError as e:
+            # Пробрасываем выше для обработки в main loop
+            raise e
+        except Exception as e:
+            print(f"❌ Error fetching from {channel_id}: {e}")
+            return []
+    
+    # ===== 3.1.6. FLOODWAIT HANDLER =====
+    
+    @staticmethod
+    async def handle_floodwait(error: FloodWaitError):
+        """
+        Обрабатывает FloodWait от Telegram.
+        
+        ЗОЛОТОЕ ПРАВИЛО: уважать wait_seconds от Telegram.
+        Добавляем jitter (0-30%), чтобы несколько экземпляров KRAKEN
+        не начали стучаться одновременно.
+        
+        Returns:
+            True если нужно пропустить следующий цикл сбора.
+        """
+        import random
+        wait_seconds = error.seconds
+        jitter = random.uniform(0, wait_seconds * 0.3)
+        delay = wait_seconds + jitter
+        
+        print(f"🌊 FloodWait: Telegram says wait {wait_seconds}s, "
+              f"waiting {delay:.1f}s (with jitter)")
+        await asyncio.sleep(delay)
+        
+        # Если ждали больше 30 секунд — пропускаем следующий цикл
+        return wait_seconds > 30
+    
+    # ===== 3.1.8. AUTH REVOKED HANDLER =====
+    
+    @staticmethod
+    async def handle_auth_revoked():
+        """
+        Обрабатывает фатальную ошибку: сессия умерла (AuthKeyInvalid).
+        
+        Отправляет BEACON FATAL и завершает процесс с exit(1).
+        Контейнер упадёт, Docker перезапустит его.
+        """
+        print("💀 FATAL: Session dead (AuthKeyInvalid)")
+        
+        # Отправляем алерт в Beacon (если доступен)
+        try:
+            from src.clients.bot_client import BotClient
+            bot = BotClient()
+            await bot.send_alert(
+                severity="FATAL",
+                error_type="AUTH_REVOKED",
+                message="Session revoked, need manual bootstrap. "
+                        "Run bootstrap_session_v3.py on server."
+            )
+        except Exception as e:
+            print(f"⚠️ Could not send Beacon alert: {e}")
+        
+        print("🛑 Exiting with code 1")
+        sys.exit(1)
+
+
+# ===== 3.1.3 & 3.1.9. LIFESPAN MANAGER =====
+
+class TelegramLifespan:
+    """
+    Менеджер жизненного цикла Telegram-клиента.
+    
+    Используется в FastAPI lifespan или в main.py как контекстный менеджер.
+    
+    Пример использования:
+        async with TelegramLifespan() as client:
+            # работаем с client
+            pass
+        # здесь client уже disconnect'нут
+    """
+    
+    def __init__(self):
+        self.client: TelegramClient | None = None
+        self._heartbeat_task: asyncio.Task | None = None
+        self._stop_event: asyncio.Event = asyncio.Event()
+    
+    async def __aenter__(self) -> TelegramClient:
+        """STARTUP: вызывается ОДИН раз при старте."""
+        print("🚀 TelegramLifespan STARTUP")
+        
+        # Инициализируем клиент (connect + start)
+        self.client = await TelegramClientManager.init_client()
+        
+        # Запускаем heartbeat в фоне
+        self._heartbeat_task = asyncio.create_task(
+            TelegramClientManager.heartbeat_loop(self._stop_event)
+        )
+        
+        return self.client
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        """SHUTDOWN: вызывается ОДИН раз при остановке."""
+        print("🛑 TelegramLifespan SHUTDOWN")
+        
+        # Останавливаем heartbeat
+        self._stop_event.set()
+        if self._heartbeat_task:
+            self._heartbeat_task.cancel()
+            try:
+                await self._heartbeat_task
+            except asyncio.CancelledError:
+                pass
+        
+        # Отключаем клиент
+        await TelegramClientManager.disconnect()
+        
+        print("✅ TelegramLifespan SHUTDOWN complete")    
