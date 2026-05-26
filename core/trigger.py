@@ -73,13 +73,15 @@ class Trigger:
         
         Добавляет задачу run_cycle, которая будет вызываться
         каждые self.interval_minutes минут.
+        Первый запуск — СРАЗУ после старта (next_run_time=datetime.now()).
         """
         self.scheduler.add_job(
             self.run_cycle,
             trigger=IntervalTrigger(minutes=self.interval_minutes),
             id="mining_cycle",
             replace_existing=True,
-            max_instances=1  # Не запускать новый цикл, пока старый не завершён
+            max_instances=1,
+            next_run_time=datetime.now()  # ПЕРВЫЙ ЗАПУСК СРАЗУ!
         )
         self.scheduler.start()
         print(f"✅ CRON scheduler started (interval={self.interval_minutes}min)")
