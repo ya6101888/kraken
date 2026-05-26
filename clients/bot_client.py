@@ -23,7 +23,7 @@ from typing import Optional
 from dotenv import load_dotenv
 
 # Загрузка .env
-env_path = Path("/opt/kraken/secrets/.env")
+env_path = Path("/app/secrets/.env")
 if env_path.exists():
     load_dotenv(env_path)
 else:
@@ -204,7 +204,7 @@ class BotClient:
         
         if not success:
             # Fallback: локальный лог
-            log_dir = Path("/opt/kraken/logs")
+            log_dir = Path("/app/logs")
             log_dir.mkdir(parents=True, exist_ok=True)
             
             log_file = log_dir / "alerts.log"

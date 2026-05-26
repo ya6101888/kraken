@@ -555,7 +555,7 @@ class DLQEntry(BaseModel):
     """
     Запись в Dead Letter Queue — сигнал, который не удалось записать в Google Sheets.
     
-    Хранится в /opt/kraken/dlq/failed_writes.json для повторных попыток.
+    Хранится в /app/dlq/failed_writes.json для повторных попыток.
     """
     model_config = ConfigDict(extra="forbid")
     

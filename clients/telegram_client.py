@@ -23,7 +23,7 @@ from telethon.errors import (
     AuthKeyInvalidError,
 )
 # Загрузка .env
-env_path = Path("/opt/kraken/secrets/.env")
+env_path = Path("/app/secrets/.env")
 if env_path.exists():
     load_dotenv(env_path)
 else:
@@ -68,7 +68,7 @@ class TelegramClientManager:
                 )
                 # Корректировка пути для запуска вне Docker
                 if session_path.startswith("/app/") and not Path("/app").exists():
-                    session_path = "/opt/kraken" + session_path[4:]
+                    session_path = "/app" + session_path[4:]
                 
                 api_id = int(os.getenv("TG_API_ID", "0"))
                 api_hash = os.getenv("TG_API_HASH", "")
@@ -76,7 +76,7 @@ class TelegramClientManager:
                 if not api_id or not api_hash:
                     raise ValueError(
                         "TG_API_ID или TG_API_HASH не заданы в .env! "
-                        "Проверь /opt/kraken/secrets/.env"
+                        "Проверь /app/secrets/.env"
                     )
                 
                 # Настройка прокси (если задан в .env)

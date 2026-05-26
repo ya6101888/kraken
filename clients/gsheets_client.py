@@ -24,7 +24,7 @@ from typing import List, Optional, Dict
 from dotenv import load_dotenv
 
 # Загрузка .env
-env_path = Path("/opt/kraken/secrets/.env")
+env_path = Path("/app/secrets/.env")
 if env_path.exists():
     load_dotenv(env_path)
 else:
@@ -55,7 +55,7 @@ class GoogleSheetsClient:
         
         # Корректировка пути для запуска вне Docker
         if self.service_account_path.startswith("/app/") and not Path("/app").exists():
-            self.service_account_path = "/opt/kraken" + self.service_account_path[4:]
+            self.service_account_path = "/app" + self.service_account_path[4:]
         
         self.client = None
         self._init_client()
@@ -273,12 +273,12 @@ class BufferedWriter:
         self.max_size = max_size
         self.dlq_path = Path(os.getenv(
             "GSHEETS_DLQ_PATH",
-            "/opt/kraken/dlq/failed_writes.json"
+            "/app/dlq/failed_writes.json"
         ))
         
         # Корректировка пути
         if str(self.dlq_path).startswith("/app/") and not Path("/app").exists():
-            self.dlq_path = Path("/opt/kraken") / self.dlq_path.relative_to("/app")
+            self.dlq_path = Path("/app") / self.dlq_path.relative_to("/app")
     
     async def add(self, signal: GoogleSheetsRow, writer: GoogleSheetsClient):
         """

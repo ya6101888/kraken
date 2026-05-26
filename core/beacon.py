@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from dotenv import load_dotenv
 
-env_path = Path("/opt/kraken/secrets/.env")
+env_path = Path("/app/secrets/.env")
 if env_path.exists():
     load_dotenv(env_path)
 else:
@@ -109,7 +109,7 @@ class Beacon:
                         self.health_status["sheets"] = "FAIL"
                 
                 # 3. Проверка .session файла
-                session_path = Path("/opt/kraken/sessions/kraken.session")
+                session_path = Path("/app/sessions/kraken.session")
                 if session_path.exists():
                     age_days = (datetime.now() - datetime.fromtimestamp(
                         session_path.stat().st_mtime
@@ -158,7 +158,7 @@ class Beacon:
                             )
                     
                     # Проверка возраста сессии (> 25 дней → предупреждение)
-                    session_path = Path("/opt/kraken/sessions/kraken.session")
+                    session_path = Path("/app/sessions/kraken.session")
                     if session_path.exists():
                         age_days = (datetime.now() - datetime.fromtimestamp(
                             session_path.stat().st_mtime
@@ -186,8 +186,8 @@ class Beacon:
         Returns:
             Словарь с возрастом сессии, размером файла, наличием бэкапа.
         """
-        session_path = Path("/opt/kraken/sessions/kraken.session")
-        backup_path = Path("/opt/kraken/sessions/kraken.session.bak")
+        session_path = Path("/app/sessions/kraken.session")
+        backup_path = Path("/app/sessions/kraken.session.bak")
         
         if not session_path.exists():
             return {"exists": False}

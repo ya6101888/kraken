@@ -22,7 +22,7 @@ from typing import List, Optional, Dict
 from dotenv import load_dotenv
 
 # Загрузка .env
-env_path = Path("/opt/kraken/secrets/.env")
+env_path = Path("/app/secrets/.env")
 if env_path.exists():
     load_dotenv(env_path)
 else:
@@ -103,7 +103,7 @@ class OpenAIClient:
         """Загружает Platinum Prompt из файла."""
         # Пробуем несколько путей
         paths = [
-            Path("/opt/kraken/src/prompts/platinum_prompt.txt"),
+            Path("/app/src/prompts/platinum_prompt.txt"),
             Path(__file__).parent.parent / "prompts" / "platinum_prompt.txt",
         ]
         

@@ -16,15 +16,15 @@ services:
     # Монтирование томов с хоста
     volumes:
       # Секреты (.env, service_account.json)
-      - /opt/kraken/secrets:/app/secrets:ro
+      - /app/secrets:/app/secrets:ro
       # Сессия Telegram (нужна запись!)
-      - /opt/kraken/sessions:/app/sessions
+      - /app/sessions:/app/sessions
       # Логи
-      - /opt/kraken/logs:/app/logs
+      - /app/logs:/app/logs
       # Dead Letter Queue
-      - /opt/kraken/dlq:/app/dlq
+      - /app/dlq:/app/dlq
       # Platinum Prompt (если есть)
-      - /opt/kraken/prompts:/app/prompts:ro
+      - /app/prompts:/app/prompts:ro
     
     # Переменные окружения
     environment:
