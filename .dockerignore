@@ -1,0 +1,42 @@
+# KRAKEN — файлы, исключаемые из Docker-образа
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Виртуальное окружение
+venv/
+.venv/
+
+# Git
+.git/
+.gitignore
+.gitattributes
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Секреты (монтируются как тома, не копируются в образ!)
+.env
+*.json
+
+# Документация
+*.md
+docs/
+
+# Временные файлы
+*.tmp
+*.log
+/tmp/

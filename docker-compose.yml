@@ -1,0 +1,50 @@
+# ===== KRAKEN v5.2.3 — Docker Compose =====
+version: "3.8"
+
+services:
+  kraken:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: kraken
+    restart: unless-stopped
+    
+    # Порт для health-check и метрик
+    ports:
+      - "8000:8000"
+    
+    # Монтирование томов с хоста
+    volumes:
+      # Секреты (.env, service_account.json)
+      - /opt/kraken/secrets:/app/secrets:ro
+      # Сессия Telegram (нужна запись!)
+      - /opt/kraken/sessions:/app/sessions
+      # Логи
+      - /opt/kraken/logs:/app/logs
+      # Dead Letter Queue
+      - /opt/kraken/dlq:/app/dlq
+      # Platinum Prompt (если есть)
+      - /opt/kraken/prompts:/app/prompts:ro
+    
+    # Переменные окружения
+    environment:
+      - KRAKEN_SESSION_PATH=/app/sessions/kraken.session
+      - KRAKEN_SESSION_BACKUP_PATH=/app/sessions/kraken.session.bak
+      - GSHEETS_SERVICE_ACCOUNT_PATH=/app/secrets/service_account.json
+      - GSHEETS_DLQ_PATH=/app/dlq/failed_writes.json
+      - INFRA_ENVIRONMENT=production
+    
+    # Ограничение ресурсов
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    
+    # Логирование
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"

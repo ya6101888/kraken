@@ -1,0 +1,35 @@
+# KRAKEN v5.2.3 — Python Dependencies
+
+# Web Framework
+fastapi>=0.115.0
+uvicorn[standard]>=0.34.0
+
+# Telegram MTProto Client
+telethon>=1.43.0
+
+# Proxy support for Telethon
+python-socks[asyncio]>=2.8.0
+
+# Google Sheets API
+gspread>=6.1.0
+oauth2client>=4.1.3
+
+# OpenAI API
+openai>=1.0.0
+
+# Configuration
+pydantic>=2.0.0
+pydantic-settings>=2.0.0
+python-dotenv>=1.0.0
+
+# Scheduler
+apscheduler>=3.10.0
+
+# Monitoring
+prometheus-client>=0.20.0
+
+# HTTP requests (for Beacon Bot)
+requests>=2.32.0
+
+# Async support
+aiofiles>=24.0.0
