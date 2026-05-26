@@ -85,7 +85,7 @@ class ChannelManager:
                         tier=row.get("tier", 3),
                         geo_focus=row.get("geo_focus", "ROSTOV_CITY"),
                         status=row.get("status", "ACTIVE"),
-                        last_scan=row.get("last_scan"),
+                        last_scan=row.get("last_scan") if row.get("last_scan") else None,
                         subscribers=row.get("subscribers"),
                         avg_reach=row.get("avg_reach"),
                         engagement=row.get("engagement"),
