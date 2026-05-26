@@ -23,12 +23,12 @@ from telethon.errors import (
     AuthKeyInvalidError,
 )
 
-# Загрузка .env
+# Загрузка .env (override=True заставляет перезаписать переменные окружения)
 env_path = Path("/app/secrets/.env")
 if env_path.exists():
-    load_dotenv(env_path)
+    load_dotenv(env_path, override=True)
 else:
-    load_dotenv(Path(__file__).parent.parent.parent / "secrets" / ".env")
+    load_dotenv(Path(__file__).parent.parent.parent / "secrets" / ".env", override=True)
 
 
 class TelegramClientManager:
