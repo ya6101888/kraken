@@ -117,7 +117,7 @@ async def lifespan(app: FastAPI):
     print("=" * 60)
     
     # Отправляем алерт о старте
-    await beacon_obj.alert("INFO", "KRAKEN started")
+    # await beacon_obj.alert("INFO", "KRAKEN started")  # TODO: fix Beacon Bot API
     
     yield  # Приложение работает здесь
     
