@@ -155,8 +155,8 @@ async def lifespan(app: FastAPI):
         print(f"⚠️ Disconnect error: {e}")
     
     # 5. Финальный алерт
-    if beacon_obj:
-        await beacon_obj.alert("INFO", "KRAKEN shutdown complete")
+    # if beacon_obj:
+    #     await beacon_obj.alert("INFO", "KRAKEN shutdown complete")
     
     print("✅ Graceful shutdown complete")
 
