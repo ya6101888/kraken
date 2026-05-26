@@ -92,7 +92,7 @@ class Engine:
             cycle_counter: Номер цикла (для дифференциации по tier)
         """
         if self._channel_manager is None:
-            from src.core.channel_manager import ChannelManager
+            from core.channel_manager import ChannelManager
             self._channel_manager = ChannelManager(self._gsheets_client)
         
         await self._channel_manager.ensure_fresh_cache()
@@ -269,7 +269,7 @@ class Engine:
         Если harvester не инициализирован — создаёт новый.
         """
         try:
-            from src.core.harvester import Harvester
+            from core.harvester import Harvester
             if not hasattr(self, '_harvester'):
                 self._harvester = Harvester()
             return await self._harvester.process(messages)
@@ -287,7 +287,7 @@ class Engine:
             return []
         
         try:
-            from src.core.ai_firewall import AIFirewall
+            from core.ai_firewall import AIFirewall
             if not hasattr(self, '_firewall'):
                 self._firewall = AIFirewall()
             return await self._firewall.classify_batch(messages)
@@ -303,7 +303,7 @@ class Engine:
             return
         
         try:
-            from src.core.storage_writer import StorageWriter
+            from core.storage_writer import StorageWriter
             if not hasattr(self, '_writer'):
                 self._writer = StorageWriter(self._gsheets_client)
             await self._writer.write_signals(signals)

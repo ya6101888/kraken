@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     Если параметр не задан — используется значение по умолчанию.
     
     Использование:
-        from src.core.config import settings
+        from core.config import settings
         print(settings.TG_API_ID)
     """
     
