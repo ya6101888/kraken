@@ -24,7 +24,7 @@ from fastapi.responses import Response
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, "/app")  # Docker-контейнер
 
-from src.core.config import settings
+from core.config import settings
 
 # Глобальные переменные (инициализируются в lifespan)
 start_time: datetime = datetime.now()
@@ -59,13 +59,13 @@ async def lifespan(app: FastAPI):
     print("=" * 60)
     
     # 1. Инициализация Telegram клиента
-    from src.clients.telegram_client import TelegramClientManager
+    from clients.telegram_client import TelegramClientManager
     print("📡 Initializing Telegram client...")
     await TelegramClientManager.init_client()
     print("✅ Telegram client ready")
     
     # 2. Инициализация Channel Manager
-    from src.core.channel_manager import ChannelManager
+    from core.channel_manager import ChannelManager
     print("📋 Loading channel registry...")
     channel_manager = ChannelManager()
     await channel_manager.ensure_fresh_cache()
@@ -73,19 +73,19 @@ async def lifespan(app: FastAPI):
     print(f"✅ Channel manager ready: {active_count} active channels")
     
     # 3. Инициализация Storage Writer
-    from src.core.storage_writer import StorageWriter
+    from core.storage_writer import StorageWriter
     print("💾 Initializing storage writer...")
     storage_writer = StorageWriter()
     print("✅ Storage writer ready")
     
     # 4. Инициализация Engine
-    from src.core.engine import Engine
+    from core.engine import Engine
     print("🎯 Initializing engine...")
     engine = Engine(channel_manager)
     print("✅ Engine ready")
     
     # 5. Инициализация Beacon
-    from src.core.beacon import Beacon
+    from core.beacon import Beacon
     print("🚨 Initializing beacon...")
     beacon_obj = Beacon(engine, channel_manager)
     print("✅ Beacon ready")
@@ -106,7 +106,7 @@ async def lifespan(app: FastAPI):
     )
     
     # 7. Запуск CRON-планировщика
-    from src.core.trigger import Trigger
+    from core.trigger import Trigger
     print("⏰ Starting CRON scheduler...")
     trigger = Trigger(engine.run_cycle)
     trigger.start()
@@ -147,7 +147,7 @@ async def lifespan(app: FastAPI):
         print("✅ Buffer flushed")
     
     # 4. Отключаем Telegram
-    from src.clients.telegram_client import TelegramClientManager
+    from clients.telegram_client import TelegramClientManager
     try:
         await TelegramClientManager.disconnect()
         print("✅ Disconnected from Telegram")
@@ -189,7 +189,7 @@ async def health_check():
 @app.get("/ready")
 async def readiness_check():
     """Проверка готовности (для K8s readiness probe)."""
-    from src.clients.telegram_client import TelegramClientManager
+    from clients.telegram_client import TelegramClientManager
     
     client = await TelegramClientManager.get_instance()
     

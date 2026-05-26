@@ -19,10 +19,7 @@ COPY requirements.txt .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY src/ ./src/
-
-# Копируем main.py в корень для правильного импорта
-COPY src/main.py ./main.py
+COPY src/ .
 
 # Устанавливаем PYTHONPATH для правильных импортов
 ENV PYTHONPATH=/app
