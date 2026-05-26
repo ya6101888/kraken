@@ -13,7 +13,6 @@
 
 import sys
 import asyncio
-import signal
 from pathlib import Path
 from datetime import datetime
 from contextlib import asynccontextmanager
@@ -21,10 +20,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response
 
-# Добавляем корень проекта в путь
+# Добавляем /app в путь (для Docker) или корень проекта (для Windows)
 sys.path.insert(0, str(Path(__file__).parent))
+sys.path.insert(0, "/app")  # Docker-контейнер
 
-from core.config import settings
+from src.core.config import settings
 
 # Глобальные переменные (инициализируются в lifespan)
 start_time: datetime = datetime.now()
@@ -59,13 +59,13 @@ async def lifespan(app: FastAPI):
     print("=" * 60)
     
     # 1. Инициализация Telegram клиента
-    from clients.telegram_client import TelegramClientManager, TelegramLifespan
+    from src.clients.telegram_client import TelegramClientManager
     print("📡 Initializing Telegram client...")
     await TelegramClientManager.init_client()
     print("✅ Telegram client ready")
     
     # 2. Инициализация Channel Manager
-    from core.channel_manager import ChannelManager
+    from src.core.channel_manager import ChannelManager
     print("📋 Loading channel registry...")
     channel_manager = ChannelManager()
     await channel_manager.ensure_fresh_cache()
@@ -73,19 +73,19 @@ async def lifespan(app: FastAPI):
     print(f"✅ Channel manager ready: {active_count} active channels")
     
     # 3. Инициализация Storage Writer
-    from core.storage_writer import StorageWriter
+    from src.core.storage_writer import StorageWriter
     print("💾 Initializing storage writer...")
     storage_writer = StorageWriter()
     print("✅ Storage writer ready")
     
     # 4. Инициализация Engine
-    from core.engine import Engine
+    from src.core.engine import Engine
     print("🎯 Initializing engine...")
     engine = Engine(channel_manager)
     print("✅ Engine ready")
     
     # 5. Инициализация Beacon
-    from core.beacon import Beacon
+    from src.core.beacon import Beacon
     print("🚨 Initializing beacon...")
     beacon_obj = Beacon(engine, channel_manager)
     print("✅ Beacon ready")
@@ -106,7 +106,7 @@ async def lifespan(app: FastAPI):
     )
     
     # 7. Запуск CRON-планировщика
-    from core.trigger import Trigger
+    from src.core.trigger import Trigger
     print("⏰ Starting CRON scheduler...")
     trigger = Trigger(engine.run_cycle)
     trigger.start()
@@ -147,7 +147,7 @@ async def lifespan(app: FastAPI):
         print("✅ Buffer flushed")
     
     # 4. Отключаем Telegram
-    from clients.telegram_client import TelegramClientManager
+    from src.clients.telegram_client import TelegramClientManager
     try:
         await TelegramClientManager.disconnect()
         print("✅ Disconnected from Telegram")
@@ -189,7 +189,7 @@ async def health_check():
 @app.get("/ready")
 async def readiness_check():
     """Проверка готовности (для K8s readiness probe)."""
-    from clients.telegram_client import TelegramClientManager
+    from src.clients.telegram_client import TelegramClientManager
     
     client = await TelegramClientManager.get_instance()
     
@@ -238,37 +238,10 @@ async def system_status():
     }
 
 
-# ===== 5.1.8. SIGNAL HANDLERS =====
-
-def setup_signal_handlers():
-    """Регистрирует обработчики SIGTERM и SIGINT для graceful shutdown."""
-    import signal as sig_module
-    
-    async def handle_shutdown(signum):
-        print(f"\n⚠️ Received signal {signum}")
-        # FastAPI сам вызовет shutdown через lifespan
-        # Здесь можно добавить дополнительную логику
-        sys.exit(0)
-    
-    try:
-        loop = asyncio.get_event_loop()
-        for sig in [sig_module.SIGTERM, sig_module.SIGINT]:
-            loop.add_signal_handler(
-                sig,
-                lambda s=sig: asyncio.create_task(handle_shutdown(s))
-            )
-        print("✅ Signal handlers registered (SIGTERM, SIGINT)")
-    except NotImplementedError:
-        # На Windows add_signal_handler не работает
-        print("⚠️ Signal handlers not available on Windows")
-
-
 # ===== ТОЧКА ВХОДА =====
 
 if __name__ == "__main__":
     import uvicorn
-    
-    setup_signal_handlers()
     
     uvicorn.run(
         "main:app",
