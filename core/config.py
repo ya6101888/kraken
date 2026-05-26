@@ -93,7 +93,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: Optional[str] = None
     
     model_config = {
-        "env_file": "/opt/kraken/secrets/.env",
+        "env_file": "/app/secrets/.env",
         "env_file_encoding": "utf-8",
         "case_sensitive": True,
         "extra": "ignore"
@@ -102,7 +102,7 @@ class Settings(BaseSettings):
 
 # Создаём глобальный экземпляр
 # На Windows файл .env может быть в другом месте — ищем
-_env_path = Path("/opt/kraken/secrets/.env")
+_env_path = Path("/app/secrets/.env")
 if not _env_path.exists():
     _env_path = Path(__file__).parent.parent.parent / "secrets" / ".env"
 
