@@ -127,7 +127,7 @@ class Engine:
         
         for channel in channels:
             channel_id = channel.channel_id
-            offset_id = self.last_processed.get(channel_id)
+            offset_id = self.last_processed.get(channel_id, 0)
             
             try:
                 messages = await TelegramClientManager.get_messages_fast(
