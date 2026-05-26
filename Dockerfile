@@ -24,6 +24,9 @@ COPY src/ ./src/
 # Копируем main.py в корень для правильного импорта
 COPY src/main.py ./main.py
 
+# Устанавливаем PYTHONPATH для правильных импортов
+ENV PYTHONPATH=/app
+
 RUN mkdir -p /app/sessions /app/secrets /app/logs /app/dlq /app/prompts \
     && chown -R kraken:kraken /app
 
