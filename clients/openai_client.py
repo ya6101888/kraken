@@ -3,14 +3,7 @@ KRAKEN OpenAI Client — AI-классификатор сигналов.
 
 Фаза 3: ИНТЕГРАЦИИ
 Модуль: 3.2 openai_client.py
-Версия: v5.2.3
-
-Принципы:
-- Загрузка Platinum Prompt из файла
-- Batch-запросы до 20 сообщений
-- Retry: 2 попытки при ошибке API
-- Fallback: пропустить сообщения, если AI недоступен
-- Бюджетирование токенов (не более 100k/день)
+Версия: v5.2.3 (GOLDEN СБОРКА)
 """
 
 import os
@@ -19,6 +12,7 @@ import asyncio
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Dict
+import sys
 from dotenv import load_dotenv
 
 # Загрузка .env
@@ -29,7 +23,6 @@ else:
     load_dotenv(Path(__file__).parent.parent.parent / "secrets" / ".env")
 
 # Импорт моделей данных
-import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from models.signal import (
     ClassificationResult,
@@ -101,7 +94,6 @@ class OpenAIClient:
     
     def _load_prompt(self) -> str:
         """Загружает Platinum Prompt из файла."""
-        # Пробуем несколько путей
         paths = [
             Path("/app/src/prompts/platinum_prompt.txt"),
             Path(__file__).parent.parent / "prompts" / "platinum_prompt.txt",
@@ -111,7 +103,6 @@ class OpenAIClient:
             if prompt_path.exists():
                 return prompt_path.read_text(encoding="utf-8")
         
-        # Fallback: встроенный промпт
         print("⚠️ Platinum prompt file not found, using built-in")
         return self._get_default_prompt()
     
@@ -128,20 +119,12 @@ class OpenAIClient:
     # ===== 3.2.2. ФОРМИРОВАНИЕ BATCH-ЗАПРОСА =====
     
     def build_batch_request(self, messages: List[str]) -> List[Dict]:
-        """
-        Формирует запрос для OpenAI из массива сообщений.
-        
-        Args:
-            messages: Список текстов сообщений (до 20 штук)
-        
-        Returns:
-            Список словарей [{message_index, content}, ...]
-        """
+        """Формирует запрос для OpenAI из массива сообщений."""
         batch = []
-        for idx, msg in enumerate(messages[:20]):  # Не более 20
+        for idx, msg in enumerate(messages[:20]):
             batch.append({
                 "message_index": idx,
-                "content": msg[:4000]  # Обрезаем слишком длинные
+                "content": msg[:4000]
             })
         return batch
     
@@ -150,16 +133,15 @@ class OpenAIClient:
     async def classify(self, messages: List[str]) -> Optional[Dict]:
         """
         Отправляет batch-запрос к OpenAI и возвращает ответ.
-        
-        Retry: до 2 дополнительных попыток при ошибке.
+        Использует синтаксис openai>=1.0.0 (AsyncOpenAI).
         """
-        import openai
+        from openai import AsyncOpenAI
         
         if not self.api_key:
             print("⚠️ OPENAI_API_KEY not set, using fallback")
             return None
         
-        openai.api_key = self.api_key
+        client = AsyncOpenAI(api_key=self.api_key)
         batch = self.build_batch_request(messages)
         
         # Оценка токенов (грубо: ~4 символа = 1 токен)
@@ -173,7 +155,7 @@ class OpenAIClient:
         for attempt in range(max_retries + 1):
             try:
                 response = await asyncio.wait_for(
-                    openai.ChatCompletion.acreate(
+                    client.chat.completions.create(
                         model=self.model,
                         messages=[
                             {"role": "system", "content": self.platinum_prompt},
@@ -192,13 +174,12 @@ class OpenAIClient:
                 
             except asyncio.TimeoutError:
                 print(f"⏱️ OpenAI timeout (attempt {attempt + 1}/{max_retries + 1})")
-            except openai.APIError as e:
-                print(f"🔴 OpenAI API error (attempt {attempt + 1}/{max_retries + 1}): {e}")
             except Exception as e:
-                print(f"❌ Unexpected error: {e}")
+                print(f"🔴 OpenAI error (attempt {attempt + 1}/{max_retries + 1}): {e}")
             
             if attempt < max_retries:
-                delay = (attempt + 1) * 2  # 2, 4 секунды
+                delay = (attempt + 1) * 2
+                print(f"⏳ Waiting {delay}s before next attempt...")
                 await asyncio.sleep(delay)
         
         print(f"❌ All {max_retries + 1} attempts failed")
@@ -207,12 +188,7 @@ class OpenAIClient:
     # ===== 3.2.4. ВАЛИДАЦИЯ ОТВЕТА =====
     
     def validate_response(self, response: Dict) -> Optional[BatchAIResponse]:
-        """
-        Проверяет ответ OpenAI через Pydantic-модель BatchAIResponse.
-        
-        Returns:
-            BatchAIResponse если валидно, None если нет.
-        """
+        """Проверяет ответ OpenAI через Pydantic-модель BatchAIResponse."""
         try:
             validated = BatchAIResponse.model_validate(response)
             return validated
@@ -223,21 +199,14 @@ class OpenAIClient:
     # ===== 3.2.5. FALLBACK ПРИ ОШИБКЕ =====
     
     def create_fallback_response(self, messages: List[str]) -> BatchAIResponse:
-        """
-        Создаёт «пустой» ответ, если OpenAI недоступен.
-        
-        В зависимости от AI_FALLBACK_ON_ERROR:
-        - 'skip': все сообщения считаются нерелевантными
-        - 'pass_all': все сообщения считаются релевантными
-        - 'block_all': все сообщения блокируются
-        """
+        """Создаёт «пустой» ответ согласно экшену из .env, если OpenAI лежит."""
         results = []
         action = self.fallback_action
         
         for i in range(min(len(messages), 20)):
             score = 0.0
             if action == "pass_all":
-                score = self.threshold  # ровно порог, чтобы прошло
+                score = self.threshold
             
             results.append(ClassificationResult(
                 message_index=i,
@@ -252,15 +221,7 @@ class OpenAIClient:
     # ===== ОСНОВНОЙ МЕТОД =====
     
     async def classify_batch(self, messages: List[str]) -> BatchAIResponse:
-        """
-        Главный метод: классифицирует batch сообщений.
-        
-        Порядок действий:
-        1. Отправляет запрос к OpenAI
-        2. Если ошибка — retry (до 2 раз)
-        3. Валидирует ответ через Pydantic
-        4. Если всё плохо — fallback
-        """
+        """Главный метод: классифицирует batch сообщений с каскадом защиты."""
         response = await self.classify(messages)
         
         if response is None:
