@@ -45,25 +45,21 @@ class TokenBudget:
         self.reset_date = datetime.now().date()
     
     def _check_reset(self):
-        """Сбрасывает счётчик, если наступил новый день."""
         today = datetime.now().date()
         if today != self.reset_date:
             self.consumed_today = 0
             self.reset_date = today
     
     def can_consume(self, tokens: int) -> bool:
-        """Можно ли потратить ещё tokens штук?"""
         self._check_reset()
         return self.consumed_today + tokens <= self.daily_limit
     
     def consume(self, tokens: int):
-        """Списывает tokens из дневного бюджета."""
         self._check_reset()
         self.consumed_today += tokens
     
     @property
     def remaining(self) -> int:
-        """Сколько ещё токенов можно потратить сегодня."""
         self._check_reset()
         return max(0, self.daily_limit - self.consumed_today)
 
@@ -89,13 +85,44 @@ class OpenAIClient:
         
         self.platinum_prompt = self._load_prompt()
         self.token_budget = TokenBudget()
+        
+        # HTTPX-клиент и OpenAI-клиент (ленивая инициализация)
+        self._http_client = None
+        self._async_client = None
+    
+    # ===== ЛЕНИВАЯ ИНИЦИАЛИЗАЦИЯ OPENAI КЛИЕНТА С ПРОКСИ =====
+    
+    @property
+    def client(self):
+        """Ленивая синглтон-инициализация OpenAI клиента с поддержкой HTTPX-прокси."""
+        if self._async_client is None:
+            from openai import AsyncOpenAI
+            import httpx
+            
+            proxy_ip = os.getenv("TG_PROXY_IP", "")
+            proxy_port = os.getenv("TG_PROXY_PORT", "")
+            proxy_user = os.getenv("TG_PROXY_USER", "")
+            proxy_pass = os.getenv("TG_PROXY_PASS", "")
+            
+            if proxy_ip and proxy_port:
+                if proxy_user and proxy_pass:
+                    proxy_auth = f"{proxy_user}:{proxy_pass}@"
+                else:
+                    proxy_auth = ""
+                proxy_url = f"http://{proxy_auth}{proxy_ip}:{proxy_port}"
+                print(f"🛡️ OpenAI Client: routing through proxy {proxy_ip}:{proxy_port}")
+                self._http_client = httpx.AsyncClient(proxy=proxy_url, timeout=self.timeout)
+                self._async_client = AsyncOpenAI(api_key=self.api_key, http_client=self._http_client)
+            else:
+                self._async_client = AsyncOpenAI(api_key=self.api_key)
+        return self._async_client
     
     # ===== 3.2.1. ЗАГРУЗКА PLATINUM PROMPT =====
     
     def _load_prompt(self) -> str:
         """Загружает Platinum Prompt из файла."""
         paths = [
-            Path("/app/src/prompts/platinum_prompt.txt"),
+            Path("/app/prompts/platinum_prompt.txt"),
             Path(__file__).parent.parent / "prompts" / "platinum_prompt.txt",
         ]
         
@@ -133,18 +160,16 @@ class OpenAIClient:
     async def classify(self, messages: List[str]) -> Optional[Dict]:
         """
         Отправляет batch-запрос к OpenAI и возвращает ответ.
-        Использует синтаксис openai>=1.0.0 (AsyncOpenAI).
+        Использует синтаксис openai>=1.0.0 (AsyncOpenAI) + HTTPX-прокси.
         """
-        from openai import AsyncOpenAI
-        
         if not self.api_key:
             print("⚠️ OPENAI_API_KEY not set, using fallback")
             return None
         
-        client = AsyncOpenAI(api_key=self.api_key)
+        # Используем ленивый персистентный клиент с прокси
+        client = self.client
         batch = self.build_batch_request(messages)
         
-        # Оценка токенов (грубо: ~4 символа = 1 токен)
         estimated_tokens = sum(len(msg) for msg in messages) // 4 + 500
         
         if not self.token_budget.can_consume(estimated_tokens):
