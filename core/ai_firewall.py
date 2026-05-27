@@ -85,38 +85,32 @@ class AIFirewall:
     ) -> List[ApprovedSignal]:
         """
         Классифицирует batch сообщений через GPT.
-        
-        Порядок:
-        1. Группирует сообщения по 20 штук
-        2. Отправляет каждый batch в OpenAI
-        3. Фильтрует по порогу релевантности
-        4. Создаёт ApprovedSignal для прошедших
-        
-        Args:
-            messages: Очищенные сообщения от Harvester
-        
-        Returns:
-            Список одобренных сигналов.
+        Версия: v5.2.3 (GOLDEN СБОРКА)
         """
         if not messages:
             return []
-        
+
         all_approved: List[ApprovedSignal] = []
-        batch_size = 20
-        
+        # Снижаем до 5 штук, чтобы OpenAI не обрезал JSON по лимиту max_tokens!
+        batch_size = 5
+
         for i in range(0, len(messages), batch_size):
-            batch = messages[i:i + batch_size]
+            batch = messages[i:i+batch_size]
             
             # Извлекаем только очищенный текст
             contents = [msg.cleaned_content for msg in batch]
-            
+
             # Отправляем в OpenAI
             response = await self.client.classify_batch(contents)
-            
+
             # Обрабатываем результаты
             for result in response.results:
+                # Защита от выхода за границы массива, если AI вернул кривой индекс
+                if result.message_index >= len(batch):
+                    continue
+                    
                 msg = batch[result.message_index]
-                
+
                 if self.is_approved(result.relevance_score):
                     try:
                         approved = ApprovedSignal(
@@ -139,11 +133,11 @@ class AIFirewall:
                         )
                         all_approved.append(approved)
                     except Exception as e:
-                        print(f"⚠️ Failed to create ApprovedSignal: {e}")
-        
+                        print(f"⚠️ Failed to create ApprovedSignal for msg_{msg.message_id}: {e}")
+
         print(f"🧠 AI Firewall: {len(messages)} in → {len(all_approved)} approved "
               f"(threshold={self.threshold})")
-        
+
         return all_approved
     
     # ===== СТАТИСТИКА =====
