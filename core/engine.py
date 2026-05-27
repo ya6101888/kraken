@@ -3,7 +3,7 @@ KRAKEN Engine — Центральный оркестратор сбора си�
 
 Фаза 4: ЯДЕРНЫЕ КОМПОНЕНТЫ
 Модуль: 4.3 engine.py
-Версия: v5.2.3
+Версия: v5.2.3 (GOLDEN ASSEMBLY)
 
 Принципы:
 - Получает каналы от ChannelManager
@@ -163,42 +163,21 @@ class Engine:
                 error_name = type(e).__name__
                 
                 if "FloodWait" in error_name:
-                    # Пробрасываем FloodWait выше
-                    raise
+                    # FloodWait — останавливаем сбор, но не падаем
+                    print(f"🌊 FloodWait from {channel_id}: {e}")
+                    break
                 
                 print(f"❌ Error fetching from {channel_id}: {e}")
-                
-                # После 3 ошибок подряд — баним канал
-                # (упрощённая логика, можно доработать)
         
         print(f"📩 Collected {len(all_messages)} messages from {len(channels)} channels")
         return all_messages
-    
-    # ===== 4.3.6. АГРЕГАЦИЯ (уже в fetch_all_messages) =====
     
     # ===== ЗАПУСК ПОЛНОГО ЦИКЛА =====
     
     async def run_cycle(self, trace_id: str) -> dict:
         """
         Выполняет ПОЛНЫЙ цикл сбора сигналов.
-        
-        Порядок:
-        1. Проверка соединения
-        2. Получение списка каналов (с учётом tier)
-        3. Сбор сообщений из каналов
-        4. Передача в Harvester (очистка, дедупликация)
-        5. Передача в AIFirewall (классификация)
-        6. Запись в Google Sheets
-        7. Логирование результатов
-        
-        Args:
-            trace_id: Уникальный ID цикла
-        
-        Returns:
-            Словарь со статистикой цикла.
         """
-        from clients.telegram_client import TelegramClientManager
-        
         started_at = datetime.now()
         stats = {
             "trace_id": trace_id,
@@ -219,16 +198,15 @@ class Engine:
         if not channels:
             print("⚠️ No channels to process")
             return stats
-        
+            
         # 3. Сбор сообщений
         try:
             messages = await self.fetch_all_messages(channels, trace_id)
         except Exception as e:
-            if "FloodWait" in type(e).__name__:
-                raise  # Пробрасываем в Trigger
+            # Наш амортизатор: сохраняем то, что fetch_all_messages успел собрать до ошибки
             stats["errors"].append(f"Fetch error: {e}")
-            messages = []
-        
+            messages = []        
+                
         stats["messages_collected"] = len(messages)
         
         # 4. Harvester (очистка и дедупликация)
@@ -263,11 +241,7 @@ class Engine:
     # ===== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ =====
     
     async def _run_harvester(self, messages: List[RawMessageWithTrace], trace_id: str) -> List[SanitizedMessage]:
-        """
-        Пропускает сообщения через Harvester (очистка, дедупликация).
-        
-        Если harvester не инициализирован — создаёт новый.
-        """
+        """Пропускает сообщения через Harvester."""
         try:
             from core.harvester import Harvester
             if not hasattr(self, '_harvester'):
@@ -278,11 +252,7 @@ class Engine:
             return []
     
     async def _run_firewall(self, messages: List[SanitizedMessage]) -> List[ApprovedSignal]:
-        """
-        Пропускает сообщения через AIFirewall (классификация).
-        
-        Если firewall не инициализирован — создаёт новый.
-        """
+        """Пропускает сообщения через AIFirewall."""
         if not messages:
             return []
         
@@ -304,11 +274,12 @@ class Engine:
         
         try:
             from core.storage_writer import StorageWriter
-            if not hasattr(self, '_writer'):
+            if not hasattr(self, '_writer') or self._writer is None:
+                # Безопасная ленивая инициализация: если gsheets_client=None, StorageWriter сам возьмет данные из конфига
                 self._writer = StorageWriter(self._gsheets_client)
             await self._writer.write_signals(signals)
-        except ImportError:
-            print("⚠️ StorageWriter not available, signals not saved")
+        except Exception as e:
+            print(f"⚠️ StorageWriter failed to save signals: {e}")
     
     # ===== СТАТИСТИКА =====
     

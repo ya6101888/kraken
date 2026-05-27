@@ -9,6 +9,7 @@ KRAKEN OpenAI Client — AI-классификатор сигналов.
 import os
 import json
 import asyncio
+import re
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Dict
@@ -230,31 +231,61 @@ class OpenAIClient:
         print(f"❌ All {max_retries + 1} attempts failed")
         return None
     
-    # ===== 3.2.4. ВАЛИДАЦИЯ ОТВЕТА =====
+    # ===== 3.2.4. ВАЛИДАЦИЯ ОТВЕТА С АДАПТЕРОМ НОРМАЛИЗАЦИИ =====
 
     def validate_response(self, response: Dict) -> Optional[BatchAIResponse]:
         """
         Проверяет ответ OpenAI через Pydantic-модель BatchAIResponse.
-        Защищает пайплайн от капризов модели, 
-        если она вынесла поля в корень объекта.
+        Защищает пайплайн от капризов модели.
         """
         try:
             if not isinstance(response, dict):
                 print(f"❌ Критической сбой: OpenAI вернул не словарь, а {type(response)}")
                 return None
 
-            # КЕЙС 1: Модель выдала поля одиночного ClassificationResult прямо в корень словаря
+            # КЕЙС 1: Модель выдала поля одиночного ClassificationResult прямо в корень
             if "results" not in response and "message_index" in response:
-                print("⚠️ Адаптер KRAKEN: OpenAI вынес поля в корень. Заворачиваем в результаты...")
+                print("⚠️ Адаптер KRAKEN: OpenAI вынес поля в корень. Заворачиваем...")
                 response = {"results": [response]}
 
-            # КЕЙС 2: Модель вернула массив внутри другого ключа (например, "data" или "messages")
+            # КЕЙС 2: Массив внутри другого ключа
             elif "results" not in response:
                 for key, value in response.items():
                     if isinstance(value, list):
-                        print(f"⚠️ Адаптер KRAKEN: Массив найден в ключе '{key}'. Перемапливаем в 'results'...")
+                        print(f"⚠️ Адаптер KRAKEN: Массив найден в ключе '{key}'. Перемапливаем...")
                         response = {"results": value}
                         break
+
+            # === АДАПТЕР KRAKEN: Лечим капризы OpenAI перед валидацией ===
+            if "results" in response and isinstance(response["results"], list):
+                for item in response["results"]:
+                    if isinstance(item, dict) and item.get("object_data"):
+                        od = item["object_data"]
+                        if not isinstance(od, dict):
+                            continue
+                        
+                        # 1. Принудительный каст этажа в строку
+                        if "floor" in od and od["floor"] is not None:
+                            od["floor"] = str(od["floor"])
+                        
+                        # 2. Нормализация дат вида "июнь 2026 г" -> "2026-06"
+                        if "completion_date" in od and od["completion_date"]:
+                            cd_str = str(od["completion_date"]).strip()
+                            if not re.match(r"^\d{4}-\d{2}$", cd_str):
+                                year_match = re.search(r"\d{4}", cd_str)
+                                months = {
+                                    "янв":1,"фев":2,"мар":3,"апр":4,"май":5,"июн":6,
+                                    "июл":7,"авг":8,"сен":9,"окт":10,"ноя":11,"дек":12
+                                }
+                                found_month = 1
+                                for m_name, m_num in months.items():
+                                    if m_name in cd_str.lower():
+                                        found_month = m_num
+                                        break
+                                if year_match:
+                                    od["completion_date"] = f"{year_match.group(0)}-{found_month:02d}"
+                                else:
+                                    od["completion_date"] = None
 
             validated = BatchAIResponse.model_validate(response)
             return validated

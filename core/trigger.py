@@ -73,7 +73,7 @@ class Trigger:
         
         Добавляет задачу run_cycle, которая будет вызываться
         каждые self.interval_minutes минут.
-        Первый запуск — СРАЗУ после старта (next_run_time=datetime.now()).
+        Первый запуск — через 15 минут (next_run_time=None даёт FastAPI загрузиться).
         """
         self.scheduler.add_job(
             self.run_cycle,
@@ -81,7 +81,7 @@ class Trigger:
             id="mining_cycle",
             replace_existing=True,
             max_instances=1,
-            next_run_time=datetime.now()  # ПЕРВЫЙ ЗАПУСК СРАЗУ!
+            next_run_time=None  # Даём FastAPI и lifespan спокойно загрузиться!
         )
         self.scheduler.start()
         print(f"✅ CRON scheduler started (interval={self.interval_minutes}min)")
@@ -197,7 +197,7 @@ class Trigger:
         1. Генерирует trace_id
         2. Вызывает engine_func(trace_id)
         3. При FloodWait — поднимает skip_next_cycle_flag
-        4. При ошибке — логирует
+        4. При ошибке — логирует и НЕ роняет приложение
         """
         self.cycle_counter += 1
         trace_id = self.generate_trace_id()
@@ -221,8 +221,8 @@ class Trigger:
                 self.skip_next_cycle_flag = True
                 print(f"🌊 Next cycle will be skipped due to FloodWait")
             
-            # Пробрасываем дальше для логирования
-            raise
+            # НЕ пробрасываем ошибку дальше — приложение продолжает жить
+            return
     
     # ===== ДОПОЛНИТЕЛЬНО: СТАТУС =====
     

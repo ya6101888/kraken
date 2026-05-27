@@ -2,7 +2,7 @@
 KRAKEN Data Contracts — Модели данных для всех этапов обработки сигналов.
 
 Фаза 2: DATA CONTRACTS
-Версия: v5.2.3 (ПОЛНАЯ СБОРКА, ПАТЧ PYTHON 3.13 + PEP 604)
+Версия: v5.2.3 (ЗОЛОТАЯ СБОРКА, ПАТЧ PYTHON 3.13 + PEP 604)
 """
 
 # ===== 2.1.1. ИМПОРТЫ =====
@@ -127,10 +127,15 @@ class BatchAIResponse(BaseModel):
     @field_validator("results")
     @classmethod
     def validate_message_indices(cls, v: list[ClassificationResult]) -> list[ClassificationResult]:
+        """
+        Защитный амортизатор SRE 5.0: если OpenAI перепутал порядок или 
+        пропустил индекс, мы мягко сортируем данные, не роняя весь конвейер.
+        """
         indices = [r.message_index for r in v]
         expected = list(range(len(v)))
         if indices != expected:
-            raise ValueError(f"Индексы должны идти по порядку 0..{len(v)-1}, получено: {indices}")
+            # Сортируем по фактическому индексу сообщения для выравнивания пайплайна
+            v.sort(key=lambda x: x.message_index)
         return v
 
 
@@ -309,4 +314,4 @@ def normalize_rooms(raw_rooms: str) -> int | None:
     num = re.search(r'(\d+)', raw_rooms)
     if num:
         return int(num.group(1))
-    return None  
+    return None

@@ -103,6 +103,8 @@ class Settings(BaseSettings):
 
 
 # Создаём глобальный экземпляр с ЖЁСТКИМ абсолютным путём
+  
+
 _env_path = Path("/app/secrets/.env")
 
 if _env_path.exists():
@@ -110,5 +112,4 @@ if _env_path.exists():
     print(f"✅ Settings loaded: environment={settings.INFRA_ENVIRONMENT}")
 else:
     print(f"⚠️ КРИТИЧЕСКИЙ СБОЙ: .env не найден по пути {_env_path}")
-    print(f"   Проверь, что том примонтирован: /opt/kraken/secrets → /app/secrets")
     settings = Settings()    

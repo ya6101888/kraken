@@ -6,7 +6,7 @@ KRAKEN AI Firewall — Классификация сигналов через GP
 Версия: v5.2.3
 
 Принципы:
-- Batch-запросы к OpenAI (до 20 сообщений)
+- Batch-запросы к OpenAI (до 5 сообщений)
 - Порог релевантности ≥ 0.7 → APPROVED
 - Fallback при ошибке GPT: skip / pass_all / block_all
 - На выходе: List[ApprovedSignal]
@@ -46,13 +46,8 @@ class AIFirewall:
     """
     
     def __init__(self):
-        # Порог релевантности из .env (по умолчанию 0.7)
         self.threshold = float(os.getenv("AI_RELEVANCE_THRESHOLD", "0.7"))
-        
-        # Действие при ошибке GPT
         self.fallback_action = os.getenv("AI_FALLBACK_ON_ERROR", "skip")
-        
-        # OpenAI клиент (создаётся лениво)
         self._client = None
     
     @property
@@ -63,21 +58,8 @@ class AIFirewall:
             self._client = OpenAIClient()
         return self._client
     
-    # ===== 4.5.7. ПОРОГ РЕЛЕВАНТНОСТИ =====
-    
     def is_approved(self, score: float) -> bool:
-        """
-        Проверяет, проходит ли сигнал по порогу релевантности.
-        
-        Args:
-            score: Оценка от GPT (0.0 - 1.0)
-        
-        Returns:
-            True если score >= threshold.
-        """
         return score >= self.threshold
-    
-    # ===== 4.5.2. BATCH-КЛАССИФИКАЦИЯ =====
     
     async def classify_batch(
         self,
@@ -91,21 +73,14 @@ class AIFirewall:
             return []
 
         all_approved: List[ApprovedSignal] = []
-        # Снижаем до 5 штук, чтобы OpenAI не обрезал JSON по лимиту max_tokens!
-        batch_size = 5
+        batch_size = 5  # Снижаем до 5, чтобы OpenAI не обрезал JSON по max_tokens
 
         for i in range(0, len(messages), batch_size):
             batch = messages[i:i+batch_size]
-            
-            # Извлекаем только очищенный текст
             contents = [msg.cleaned_content for msg in batch]
-
-            # Отправляем в OpenAI
             response = await self.client.classify_batch(contents)
 
-            # Обрабатываем результаты
             for result in response.results:
-                # Защита от выхода за границы массива, если AI вернул кривой индекс
                 if result.message_index >= len(batch):
                     continue
                     
@@ -140,10 +115,7 @@ class AIFirewall:
 
         return all_approved
     
-    # ===== СТАТИСТИКА =====
-    
     def get_stats(self) -> dict:
-        """Возвращает статистику Firewall."""
         return {
             "threshold": self.threshold,
             "fallback_action": self.fallback_action,
