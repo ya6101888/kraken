@@ -134,14 +134,35 @@ class OpenAIClient:
         return self._get_default_prompt()
     
     def _get_default_prompt(self) -> str:
-        """Встроенный промпт, если файл не найден."""
+        """Встроенный промпт с жесткой фиксацией корневого ключа results"""
         return """Ты — AI-классификатор сигналов недвижимости KRAKEN.
-Проанализируй сообщения и верни JSON с полями:
-- message_index: номер сообщения (0-19)
-- relevance_score: оценка релевантности (0.0-1.0)
+Ты ОБЯЗАН ответить строго JSON-объектом, у которого есть единственный корневой ключ "results", содержащий массив объектов.
+
+Структура ответа:
+{
+  "results": [
+    {
+      "message_index": 0,
+      "relevance_score": 0.95,
+      "market_segment": "PRIMARY",
+      "geo_focus": "ROSTOV_CITY",
+      "object_data": {
+        "price": 5200000,
+        "address": "ул. Ленина, 45",
+        "rooms": 2,
+        "area": 54.5,
+        "floor": "5/17",
+        "developer": "ГК СМУ-1",
+        "completion_date": "2026-12"
+      }
+    }
+  ]
+}
+
+Правила классификации:
 - market_segment: PRIMARY/SECONDARY/RENT/INVEST/PRO или null
 - geo_focus: ROSTOV_CITY/ROSTOV_REGION/SOUTHERN_DISTRICT/FEDERAL или null
-- object_data: {price, address, rooms, area, floor, developer, completion_date} — все поля null если нет данных"""
+- Все поля внутри object_data строго optional и ставятся в null, если точных данных нет."""
     
     # ===== 3.2.2. ФОРМИРОВАНИЕ BATCH-ЗАПРОСА =====
     
@@ -166,7 +187,6 @@ class OpenAIClient:
             print("⚠️ OPENAI_API_KEY not set, using fallback")
             return None
         
-        # Используем ленивый персистентный клиент с прокси
         client = self.client
         batch = self.build_batch_request(messages)
         
