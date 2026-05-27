@@ -231,12 +231,12 @@ class OpenAIClient:
         return None
     
     # ===== 3.2.4. ВАЛИДАЦИЯ ОТВЕТА =====
-    
-   
-        def validate_response(self, response: Dict) -> Optional[BatchAIResponse]:
-        """   Проверяет ответ OpenAI через Pydantic-модель BatchAIResponse.
+
+    def validate_response(self, response: Dict) -> Optional[BatchAIResponse]:
+        """
+        Проверяет ответ OpenAI через Pydantic-модель BatchAIResponse.
         Защищает пайплайн от капризов модели, 
-        если она вынесла поля в корень объекта. 
+        если она вынесла поля в корень объекта.
         """
         try:
             if not isinstance(response, dict):
@@ -262,6 +262,7 @@ class OpenAIClient:
         except Exception as e:
             print(f"❌ Invalid AI response format: {e}")
             return None
+
     # ===== 3.2.5. FALLBACK ПРИ ОШИБКЕ =====
     
     def create_fallback_response(self, messages: List[str]) -> BatchAIResponse:
