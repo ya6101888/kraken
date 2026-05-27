@@ -22,13 +22,13 @@ from telethon.errors import (
     FloodWaitError,
     AuthKeyInvalidError,
 )
-
-# Загрузка .env (override=True заставляет перезаписать переменные окружения)
+# Загрузка .env — только абсолютный путь, без fallback'ов
 env_path = Path("/app/secrets/.env")
 if env_path.exists():
     load_dotenv(env_path, override=True)
 else:
-    load_dotenv(Path(__file__).parent.parent.parent / "secrets" / ".env", override=True)
+    print(f"⚠️ .env not found at {env_path}")
+
 
 
 class TelegramClientManager:

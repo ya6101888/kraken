@@ -100,15 +100,15 @@ class Settings(BaseSettings):
     }
 
 
-# Создаём глобальный экземпляр
-# На Windows файл .env может быть в другом месте — ищем
+
+
+# Создаём глобальный экземпляр с ЖЁСТКИМ абсолютным путём
 _env_path = Path("/app/secrets/.env")
-if not _env_path.exists():
-    _env_path = Path(__file__).parent.parent.parent / "secrets" / ".env"
 
 if _env_path.exists():
     settings = Settings(_env_file=str(_env_path))
     print(f"✅ Settings loaded: environment={settings.INFRA_ENVIRONMENT}")
 else:
-    print(f"⚠️ .env not found at {_env_path}, using defaults")
-    settings = Settings()
+    print(f"⚠️ КРИТИЧЕСКИЙ СБОЙ: .env не найден по пути {_env_path}")
+    print(f"   Проверь, что том примонтирован: /opt/kraken/secrets → /app/secrets")
+    settings = Settings()    
