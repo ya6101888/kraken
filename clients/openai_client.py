@@ -232,15 +232,36 @@ class OpenAIClient:
     
     # ===== 3.2.4. ВАЛИДАЦИЯ ОТВЕТА =====
     
-    def validate_response(self, response: Dict) -> Optional[BatchAIResponse]:
-        """Проверяет ответ OpenAI через Pydantic-модель BatchAIResponse."""
+   
+        def validate_response(self, response: Dict) -> Optional[BatchAIResponse]:
+        """   Проверяет ответ OpenAI через Pydantic-модель BatchAIResponse.
+        Защищает пайплайн от капризов модели, 
+        если она вынесла поля в корень объекта. 
+        """
         try:
+            if not isinstance(response, dict):
+                print(f"❌ Критической сбой: OpenAI вернул не словарь, а {type(response)}")
+                return None
+
+            # КЕЙС 1: Модель выдала поля одиночного ClassificationResult прямо в корень словаря
+            if "results" not in response and "message_index" in response:
+                print("⚠️ Адаптер KRAKEN: OpenAI вынес поля в корень. Заворачиваем в результаты...")
+                response = {"results": [response]}
+
+            # КЕЙС 2: Модель вернула массив внутри другого ключа (например, "data" или "messages")
+            elif "results" not in response:
+                for key, value in response.items():
+                    if isinstance(value, list):
+                        print(f"⚠️ Адаптер KRAKEN: Массив найден в ключе '{key}'. Перемапливаем в 'results'...")
+                        response = {"results": value}
+                        break
+
             validated = BatchAIResponse.model_validate(response)
             return validated
+            
         except Exception as e:
             print(f"❌ Invalid AI response format: {e}")
             return None
-    
     # ===== 3.2.5. FALLBACK ПРИ ОШИБКЕ =====
     
     def create_fallback_response(self, messages: List[str]) -> BatchAIResponse:
