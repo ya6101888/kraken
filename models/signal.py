@@ -2,12 +2,12 @@
 KRAKEN Data Contracts — Модели данных для всех этапов обработки сигналов.
 
 Фаза 2: DATA CONTRACTS
-Версия: v5.2.3 (ПАТЧ СТАБИЛЬНОСТИ СЕГМЕНТОВ)
+Версия: v5.2.3 (ПОЛНАЯ СБОРКА, ПАТЧ PYTHON 3.13 + PEP 604)
 """
 
 # ===== 2.1.1. ИМПОРТЫ =====
 from datetime import datetime
-from typing import Optional, Literal, List, Dict, Any
+from typing import Literal, Any
 from pydantic import BaseModel, Field, ConfigDict, field_validator
 import re
 
@@ -17,13 +17,8 @@ import re
 SignalStatus = Literal["PENDING", "APPROVED", "REJECTED", "DUPLICATE", "ERROR"]
 
 RejectReason = Literal[
-    "IRRELEVANT_LOCATION",
-    "SPAM",
-    "TOO_SHORT",
-    "TOO_LONG",
-    "NO_MEANING",
-    "OLD_MESSAGE",
-    "AI_ERROR"
+    "IRRELEVANT_LOCATION", "SPAM", "TOO_SHORT", "TOO_LONG",
+    "NO_MEANING", "OLD_MESSAGE", "AI_ERROR"
 ]
 
 MarketSegment = Literal["PRIMARY", "SECONDARY", "RENT", "INVEST", "PRO"]
@@ -49,194 +44,113 @@ ObjectFieldStatus = Literal["PRESENT", "MISSING"]
 SignalSource = Literal["TELEGRAM_CHANNEL", "TELEGRAM_SUPERGROUP", "TELEGRAM_CHAT", "TELEGRAM_BOT"]
 
 
-# ===== 2.1.3. ObjectData (Параметры объекта недвижимости) =====
+# ===== 2.1.3. ObjectData =====
 
 class ObjectData(BaseModel):
-    """
-    Параметры объекта недвижимости, извлечённые AI из текста сообщения.
-    Игнорирует лишние галлюцинации OpenAI, сохраняя стабильность.
-    """
+    """Параметры объекта недвижимости, извлечённые AI."""
     model_config = ConfigDict(extra="ignore")
     
-    price: Optional[int] = Field(
-        default=None,
-        ge=0,
-        le=1_000_000_000,
-        description="Цена в рублях (0 — 1 млрд)"
-    )
-    address: Optional[str] = Field(
-        default=None,
-        max_length=500,
-        description="Адрес объекта"
-    )
-    rooms: Optional[int] = Field(
-        default=None,
-        ge=1,
-        le=10,
-        description="Количество комнат (1-10)"
-    )
-    area: Optional[float] = Field(
-        default=None,
-        ge=1.0,
-        le=1000.0,
-        description="Площадь в м² (1.0 — 1000.0)"
-    )
-    floor: Optional[str] = Field(
-        default=None,
-        max_length=50,
-        description="Этаж (например, '5/12')"
-    )
-    developer: Optional[str] = Field(
-        default=None,
-        max_length=200,
-        description="Застройщик"
-    )
-    completion_date: Optional[str] = Field(
-        default=None,
-        pattern=r"^\d{4}-\d{2}$",
-        description="Дата сдачи в формате ГГГГ-ММ (например, '2026-12')"
-    )
+    price: int | None = Field(default=None, ge=0, le=1_000_000_000)
+    address: str | None = Field(default=None, max_length=500)
+    rooms: int | None = Field(default=None, ge=1, le=10)
+    area: float | None = Field(default=None, ge=1.0, le=1000.0)
+    floor: str | None = Field(default=None, max_length=50)
+    developer: str | None = Field(default=None, max_length=200)
+    completion_date: str | None = Field(default=None, pattern=r"^\d{4}-\d{2}$")
 
     @field_validator("completion_date")
     @classmethod
-    def validate_completion_date(cls, v: Optional[str]) -> Optional[str]:
-        """Проверка: месяц должен быть 01-12."""
+    def validate_completion_date(cls, v: str | None) -> str | None:
         if v is None:
             return v
         try:
             year, month = v.split("-")
-            month_int = int(month)
-            if not (1 <= month_int <= 12):
+            if not (1 <= int(month) <= 12):
                 raise ValueError(f"Месяц должен быть 01-12, получено: {month}")
         except (ValueError, AttributeError):
             raise ValueError(f"Неверный формат даты: {v}. Ожидается ГГГГ-ММ")
         return v
-    
 
-# ===== 2.1.4. RawTelegramMessage (Сырое сообщение из Telegram) =====
+
+# ===== 2.1.4. RawTelegramMessage =====
 
 class RawTelegramMessage(BaseModel):
-    """Сырое сообщение, полученное от Telegram API."""
+    """Сырое сообщение из Telegram."""
     model_config = ConfigDict(extra="forbid")
     
-    message_id: int = Field(ge=1, description="Уникальный ID сообщения в канале")
-    channel_id: str = Field(min_length=1, max_length=100, description="ID канала")
-    channel_name: str = Field(min_length=1, max_length=200, description="Название канала")
-    content: str = Field(max_length=10000, description="Текст сообщения")
-    date: datetime = Field(description="Дата и время публикации (UTC)")
-    from_id: Optional[int] = Field(default=None, description="ID отправителя")
-    views: Optional[int] = Field(default=None, ge=0, description="Количество просмотров")
+    message_id: int = Field(ge=1)
+    channel_id: str = Field(min_length=1, max_length=100)
+    channel_name: str = Field(min_length=1, max_length=200)
+    content: str = Field(max_length=10000)
+    date: datetime
+    from_id: int | None = Field(default=None)
+    views: int | None = Field(default=None, ge=0)
 
 
-# ===== 2.1.5. RawMessageWithTrace (Сообщение с trace_id) =====
+# ===== 2.1.5. RawMessageWithTrace =====
 
 class RawMessageWithTrace(RawTelegramMessage):
-    """RawTelegramMessage + идентификатор цикла сбора (trace_id)."""
-    trace_id: str = Field(
-        pattern=r"^KRAKEN_\d{8}_\d{6}_[a-f0-9]{8}$",
-        description="Уникальный ID цикла (KRAKEN_YYYYMMDD_HHMMSS_xxxxxxxx)"
-    )
-    collected_at: datetime = Field(
-        default_factory=datetime.now,
-        description="Когда сообщение было собрано (UTC)"
-    )
+    """Сообщение с trace_id."""
+    trace_id: str = Field(pattern=r"^KRAKEN_\d{8}_\d{6}_[a-f0-9]{8}$")
+    collected_at: datetime = Field(default_factory=datetime.now)
 
 
-# ===== 2.1.6. SanitizedMessage (Очищенное сообщение) =====
+# ===== 2.1.6. SanitizedMessage =====
 
 class SanitizedMessage(RawMessageWithTrace):
-    """Сообщение после Harvester-обработки."""
-    content_hash: str = Field(
-        pattern=r"^[a-f0-9]{64}$",
-        description="SHA-256 хеш очищенного контента"
-    )
-    cleaned_content: str = Field(
-        max_length=4000,
-        description="Очищенный текст"
-    )
-    is_rejected: bool = Field(
-        default=False,
-        description="Отклонено ли сообщение фильтром"
-    )
-    reject_reason: Optional[RejectReason] = Field(
-        default=None,
-        description="Причина отклонения"
-    )
+    """Сообщение после Harvester."""
+    content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    cleaned_content: str = Field(max_length=4000)
+    is_rejected: bool = Field(default=False)
+    reject_reason: RejectReason | None = Field(default=None)
 
 
 # ===== 2.1.7. ClassificationResult + BatchAIResponse =====
 
 class ClassificationResult(BaseModel):
-    """
-    Результат AI-классификации ОДНОГО сообщения.
-    Игнорирует добавленные OpenAI левые теги и текстовые обоснования.
-    """
+    """Результат AI-классификации одного сообщения."""
     model_config = ConfigDict(extra="ignore")
     
-    message_index: int = Field(
-        ge=0,
-        le=19,
-        description="Индекс сообщения в батче (0..19)"
-    )
-    relevance_score: float = Field(
-        ge=0.0,
-        le=1.0,
-        description="Оценка релевантности (0.0 = нерелевантно, 1.0 = идеально)"
-    )
-    market_segment: Optional[MarketSegment] = Field(
-        default=None,
-        description="Сегмент рынка недвижимости"
-    )
-    geo_focus: Optional[GeoFocus] = Field(
-        default=None,
-        description="Географический фокус"
-    )
-    object_data: ObjectData = Field(
-        default_factory=ObjectData,
-        description="Извлечённые параметры объекта"
-    )
+    message_index: int = Field(ge=0, le=19)
+    relevance_score: float = Field(ge=0.0, le=1.0)
+    market_segment: MarketSegment | None = Field(default=None)
+    geo_focus: GeoFocus | None = Field(default=None)
+    object_data: ObjectData = Field(default_factory=ObjectData)
 
 
 class BatchAIResponse(BaseModel):
-    """Ответ GPT на батч сообщений (до 20 штук)."""
+    """Ответ GPT на батч сообщений."""
     model_config = ConfigDict(extra="ignore")
     
-    results: List[ClassificationResult] = Field(
-        min_length=1,
-        max_length=20,
-        description="Результаты классификации"
-    )
+    results: list[ClassificationResult] = Field(min_length=1, max_length=20)
 
     @field_validator("results")
     @classmethod
-    def validate_message_indices(cls, v: List[ClassificationResult]) -> List[ClassificationResult]:
-        """Проверка: индексы должны идти по порядку 0, 1, 2..."""
+    def validate_message_indices(cls, v: list[ClassificationResult]) -> list[ClassificationResult]:
         indices = [r.message_index for r in v]
         expected = list(range(len(v)))
         if indices != expected:
-            raise ValueError(
-                f"Индексы должны идти по порядку 0..{len(v)-1}, получено: {indices}"
-            )
+            raise ValueError(f"Индексы должны идти по порядку 0..{len(v)-1}, получено: {indices}")
         return v
 
 
-# ===== 2.1.8. ApprovedSignal (Одобренный сигнал) =====
+# ===== 2.1.8. ApprovedSignal =====
 
 class ApprovedSignal(SanitizedMessage):
     """Сообщение, прошедшее AI-фильтр."""
-    relevance_score: float = Field(ge=0.0, le=1.0, description="Итоговая оценка релевантности от AI")
-    is_approved: bool = Field(default=True, description="Флаг одобрения")
-    approved_at: datetime = Field(default_factory=datetime.now, description="Когда сигнал был одобрен")
-    signal_id: str = Field(default="", description="Уникальный ID сигнала")
-    market_segment: Optional[MarketSegment] = Field(default=None, description="Определённый AI сегмент рынка")
-    geo_focus: Optional[GeoFocus] = Field(default=None, description="Определённый AI гео-фокус")
-    object_data: ObjectData = Field(default_factory=ObjectData, description="Извлечённые параметры объекта")
+    relevance_score: float = Field(ge=0.0, le=1.0)
+    is_approved: bool = Field(default=True)
+    approved_at: datetime = Field(default_factory=datetime.now)
+    signal_id: str = Field(default="")
+    market_segment: MarketSegment | None = Field(default=None)
+    geo_focus: GeoFocus | None = Field(default=None)
+    object_data: ObjectData = Field(default_factory=ObjectData)
 
     @field_validator("signal_id")
     @classmethod
     def validate_signal_id_format(cls, v: str) -> str:
         if v and not re.match(r"^SIG_[a-f0-9]{8}_\d+$", v):
-            raise ValueError(f"Неверный формат signal_id: {v}. Ожидается SIG_xxxxxxxx_N")
+            raise ValueError(f"Неверный формат signal_id: {v}")
         return v
     
     def model_post_init(self, __context):
@@ -245,29 +159,29 @@ class ApprovedSignal(SanitizedMessage):
             object.__setattr__(self, "signal_id", f"SIG_{short_trace}_{self.message_id}")
 
 
-# ===== 2.1.9. GoogleSheetsRow (Строка для записи в таблицу) =====
+# ===== 2.1.9. GoogleSheetsRow =====
 
 class GoogleSheetsRow(BaseModel):
     """Плоская модель для записи в Google Sheets."""
     model_config = ConfigDict(extra="forbid")
     
-    signal_id: str = Field(description="Уникальный ID сигнала")
-    trace_id: str = Field(description="ID цикла сбора")
-    channel_name: str = Field(description="Название канала")
-    message_id: int = Field(description="ID сообщения")
-    content: Optional[str] = Field(default=None, description="Очищенный текст")
-    relevance_score: float = Field(description="Оценка релевантности")
-    market_segment: Optional[str] = Field(default=None, description="Сегмент рынка")
-    geo_focus: Optional[str] = Field(default=None, description="Гео-фокус")
-    price: Optional[int] = Field(default=None, description="Цена в рублях")
-    rooms: Optional[int] = Field(default=None, description="Количество комнат")
-    area: Optional[float] = Field(default=None, description="Площадь в м²")
-    floor: Optional[str] = Field(default=None, description="Этаж")
-    address: Optional[str] = Field(default=None, description="Адрес")
-    developer: Optional[str] = Field(default=None, description="Застройщик")
-    completion_date: Optional[str] = Field(default=None, description="Дата сдачи (ГГГГ-ММ)")
-    collected_at: datetime = Field(description="Когда собрано")
-    wf06_used_at: Optional[datetime] = Field(default=None, description="Когда прочитано заводом")
+    signal_id: str
+    trace_id: str
+    channel_name: str
+    message_id: int
+    content: str | None = None
+    relevance_score: float
+    market_segment: str | None = None
+    geo_focus: str | None = None
+    price: int | None = None
+    rooms: int | None = None
+    area: float | None = None
+    floor: str | None = None
+    address: str | None = None
+    developer: str | None = None
+    completion_date: str | None = None
+    collected_at: datetime
+    wf06_used_at: datetime | None = None
     
     @classmethod
     def from_approved_signal(cls, signal: ApprovedSignal) -> "GoogleSheetsRow":
@@ -292,38 +206,107 @@ class GoogleSheetsRow(BaseModel):
         )
 
 
-# ===== 2.1.10. ChannelRegistryEntry (Запись в реестре каналов) =====
+# ===== 2.1.10. ChannelRegistryEntry =====
 
 class ChannelRegistryEntry(BaseModel):
     """Один канал в реестре tg_channels."""
     model_config = ConfigDict(extra="forbid")
     
-    channel_id: str = Field(min_length=1, max_length=100, description="ID канала")
-    title: str = Field(min_length=1, max_length=200, description="Название канала")
-    source_type: ChannelSourceType = Field(description="Тип источника")
-    tier: ChannelTier = Field(description="Уровень канала (1-5)")
-    geo_focus: GeoFocus = Field(description="Географический фокус")
-    status: ChannelStatus = Field(default="ACTIVE", description="Статус канала")
-    last_scan: Optional[datetime] = Field(default=None, description="Дата последнего сканирования")
-    subscribers: Optional[int] = Field(default=None, ge=0, description="Количество подписчиков")
-    avg_reach: Optional[int] = Field(default=None, ge=0, description="Средний охват")
-    engagement: Optional[float] = Field(default=None, ge=0.0, le=100.0, description="Вовлечённость (%)")
-    citation_index: Optional[float] = Field(default=None, ge=0.0, description="Индекс цитирования")
-    content_quality: Optional[float] = Field(default=None, ge=0.0, le=10.0, description="Качество контента (0-10)")
-    fraud_signs: Optional[List[str]] = Field(default=None, description="Признаки накрутки")
+    channel_id: str = Field(min_length=1, max_length=100)
+    title: str = Field(min_length=1, max_length=200)
+    source_type: ChannelSourceType
+    tier: ChannelTier
+    geo_focus: GeoFocus
+    status: ChannelStatus = Field(default="ACTIVE")
+    last_scan: datetime | None = Field(default=None)
+    subscribers: int | None = Field(default=None, ge=0)
+    avg_reach: int | None = Field(default=None, ge=0)
+    engagement: float | None = Field(default=None, ge=0.0, le=100.0)
+    citation_index: float | None = Field(default=None, ge=0.0)
+    content_quality: float | None = Field(default=None, ge=0.0, le=10.0)
+    fraud_signs: list[str] | None = Field(default=None)
 
 
-# ===== 2.1.11. MiningCycleLog (Лог цикла сбора) =====
+# ===== 2.1.11. MiningCycleLog =====
 
 class MiningCycleLog(BaseModel):
-    """Запись в логе цикла сбора (tg_mining_log)."""
+    """Запись в логе цикла сбора."""
     model_config = ConfigDict(extra="forbid")
     
-    trace_id: str = Field(description="Уникальный ID цикла")
-    started_at: datetime = Field(description="Время начала цикла")
-    finished_at: Optional[datetime] = Field(default=None, description="Время завершения цикла")
-    duration_seconds: Optional[float] = Field(default=None, ge=0, description="Длительность цикла в секундах")
-    messages_collected: int = Field(ge=0, description="Всего собрано сообщений")
-    messages_after_harvester: int = Field(ge=0, description="Сообщений после фильтра Harvester")
-    signals_approved: int = Field(ge=0, description="Сигналов одобрено AI")
-    errors: Optional            
+    trace_id: str
+    started_at: datetime
+    finished_at: datetime | None = None
+    duration_seconds: float | None = Field(default=None, ge=0)
+    messages_collected: int = Field(ge=0)
+    messages_after_harvester: int = Field(ge=0)
+    signals_approved: int = Field(ge=0)
+    errors: list[dict[str, Any]] | None = None
+    floodwait_seconds: int | None = Field(default=None, ge=0)
+
+
+# ===== 2.1.12. DLQEntry =====
+
+class DLQEntry(BaseModel):
+    """Запись в Dead Letter Queue."""
+    model_config = ConfigDict(extra="forbid")
+    
+    timestamp: datetime = Field(default_factory=datetime.now)
+    trace_id: str
+    signal: ApprovedSignal
+    error: str
+    retry_count: int = Field(default=0, ge=0, le=3)
+
+
+# ===== 2.1.13. BeaconAlert =====
+
+class BeaconAlert(BaseModel):
+    """Алерт мониторинга."""
+    model_config = ConfigDict(extra="forbid")
+    
+    severity: AlertSeverity
+    error_type: str | None = None
+    trace_id: str | None = None
+    message: str = Field(min_length=1, max_length=1000)
+    timestamp: datetime = Field(default_factory=datetime.now)
+
+
+# ===== 2.1.16. УТИЛИТЫ НОРМАЛИЗАЦИИ =====
+
+def normalize_price(raw_price: str) -> int | None:
+    """Извлекает цену в рублях."""
+    if not raw_price:
+        return None
+    cleaned = re.sub(r'\s', '', raw_price.lower())
+    if 'млн' in cleaned:
+        num = re.search(r'(\d+(?:[.,]\d+)?)', cleaned)
+        if num:
+            return int(float(num.group(1).replace(',', '.')) * 1_000_000)
+    if 'тыс' in cleaned or 'к' in cleaned:
+        num = re.search(r'(\d+(?:[.,]\d+)?)', cleaned)
+        if num:
+            return int(float(num.group(1).replace(',', '.')) * 1_000)
+    num = re.search(r'(\d+(?:[.,]\d+)?)', cleaned)
+    if num:
+        return int(float(num.group(1).replace(',', '.')))
+    return None
+
+
+def normalize_rooms(raw_rooms: str) -> int | None:
+    """Извлекает количество комнат."""
+    if not raw_rooms:
+        return None
+    low = raw_rooms.lower()
+    mapping = {
+        'студия': 1, 'студию': 1,
+        'двушка': 2, '2-к': 2, '2к': 2, 'двухкомнатная': 2,
+        'трёшка': 3, 'трешка': 3, '3-к': 3, '3к': 3, 'трёхкомнатная': 3, 'трехкомнатная': 3,
+        'четырехкомнатная': 4, '4-к': 4, '4к': 4,
+        'пятикомнатная': 5, '5-к': 5, '5к': 5,
+    }
+    for key, value in mapping.items():
+        if key in low:
+            return value
+    num = re.search(r'(\d+)', raw_rooms)
+    if num:
+        return int(num.group(1))
+    return None  
