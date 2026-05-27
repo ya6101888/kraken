@@ -150,7 +150,7 @@ class Engine:
                                 channel_name=getattr(msg.chat, 'title', channel.title) if msg.chat else channel.title,
                                 content=msg.text or "",
                                 date=msg.date.replace(tzinfo=None) if msg.date else datetime.now(),
-                                from_id=getattr(msg, 'from_id', None),
+                                from_id=msg.sender_id if msg.sender_id else None,
                                 views=getattr(msg, 'views', None),
                                 trace_id=trace_id,
                                 collected_at=datetime.now()

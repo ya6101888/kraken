@@ -173,6 +173,18 @@ app = FastAPI(
 
 # ===== 5.2.1. HEALTH CHECK =====
 
+# ===== КОРНЕВОЙ ЭНДПОИНТ ДЛЯ МОНИТОРИНГА =====
+
+@app.get("/")
+async def root_ping():
+    """Ответ на ежеминутный опрос админского мониторинга трафика"""
+    return {
+        "status": "ok",
+        "service": "KRAKEN",
+        "version": "5.2.3",
+        "timestamp": datetime.now().isoformat()
+    }
+
 @app.get("/health")
 async def health_check():
     """Базовый health check для балансировщика."""
