@@ -3,11 +3,12 @@ KRAKEN Harvester — Очистка, дедупликация и фильтра�
 
 Фаза 4: ЯДЕРНЫЕ КОМПОНЕНТЫ
 Модуль: 4.4 harvester.py
-Версия: v5.2.3
+Версия: v5.2.3 (GOLDEN ASSEMBLY)
 
 Принципы:
-- SHA-256 дедупликация (FIFO-кэш на 10 000 хешей)
-- Regex-очистка: HTML, ссылки, эмодзи (опционально)
+- Постоянный дисковый FIFO-кэш хешей (сохраняется при перезапусках Docker)
+- SHA-256 дедупликация (FIFO-ограничение на 10 000 хешей)
+- Regex-очистка: HTML, ссылки, лишние пробелы
 - Фильтр длины: 20-4000 символов
 - Фильтр даты: старше 24 часов → OLD_MESSAGE
 - На выходе: List[SanitizedMessage]
@@ -31,25 +32,16 @@ from models.signal import (
 
 
 class RegexSanitizer:
-    """
-    Очищает текст сообщения от мусора.
+    """Очищает текст сообщения от мусора."""
     
-    Удаляет:
-    - HTML-теги: <div>, <br>, <a href="..."> и т.д.
-    - Ссылки: https://..., http://...
-    - Эмодзи (опционально)
-    - Лишние пробелы и переносы строк
-    """
-    
-    # Скомпилированные регулярки (для скорости)
     RE_HTML = re.compile(r'<[^>]+>')
     RE_LINKS = re.compile(r'https?://\S+')
     RE_EMOJI = re.compile(
-        r'[\U00010000-\U0010FFFF]'  # Supplementary Multilingual Plane
-        r'|[\u2600-\u27BF]'          # Разные символы
-        r'|[\uE000-\uF8FF]'          # Private Use Area
-        r'|[\u2011-\u26FF]'          # Разные символы
-        r'|[\uFE0E-\uFE0F]'         # Variation Selectors
+        r'[\U00010000-\U0010FFFF]'
+        r'|[\u2600-\u27BF]'
+        r'|[\uE000-\uF8FF]'
+        r'|[\u2011-\u26FF]'
+        r'|[\uFE0E-\uFE0F]'
     , re.UNICODE)
     RE_SPACES = re.compile(r'\s+')
     
@@ -61,48 +53,24 @@ class RegexSanitizer:
         remove_html: bool = True,
         remove_emoji: bool = False
     ) -> str:
-        """
-        Очищает текст сообщения.
-        
-        Args:
-            text: Исходный текст
-            remove_links: Удалять ли ссылки
-            remove_html: Удалять ли HTML-теги
-            remove_emoji: Удалять ли эмодзи
-        
-        Returns:
-            Очищенный текст.
-        """
         if not text:
             return ""
         
-        # Удаление HTML-тегов
         if remove_html:
             text = cls.RE_HTML.sub('', text)
-        
-        # Удаление ссылок
         if remove_links:
             text = cls.RE_LINKS.sub('', text)
-        
-        # Удаление эмодзи (опционально)
         if remove_emoji:
             text = cls.RE_EMOJI.sub('', text)
-        
-        # Схлопывание пробелов и обрезка краёв
+            
         text = cls.RE_SPACES.sub(' ', text).strip()
-        
         return text
 
 
 class Harvester:
     """
     Очищает и фильтрует сообщения перед отправкой в AI.
-    
-    Этапы обработки:
-    1. Дедупликация (SHA-256)
-    2. Regex-очистка (HTML, ссылки, эмодзи)
-    3. Фильтр длины (20-4000 символов)
-    4. Фильтр даты (не старше 24 часов)
+    Хранит базу хэшей на диске хоста для сквозной дедупликации.
     """
     
     def __init__(
@@ -112,24 +80,59 @@ class Harvester:
         max_length: int = 4000,
         max_age_hours: int = 24
     ):
-        """
-        Args:
-            max_cache_size: Размер кэша хешей для дедупликации
-            min_length: Минимальная длина сообщения
-            max_length: Максимальная длина сообщения
-            max_age_hours: Максимальный возраст сообщения в часах
-        """
         self.max_cache_size = max_cache_size
         self.min_length = min_length
         self.max_length = max_length
         self.max_age_hours = max_age_hours
         
-        # Дедупликация: set для быстрого поиска + deque для FIFO
-        self.processed_hashes: set = set()
-        self.hash_queue: deque = deque(maxlen=max_cache_size)
+        # SRE Канон: Файловый кэш в примонтированном Docker-томе логов
+        self.cache_file = Path("/app/logs/processed_hashes.uid")
+        
+        # Загружаем существующие хэши с диска
+        self.processed_hashes, temp_queue = self._load_cache_from_disk()
+        self.hash_queue: deque = deque(temp_queue, maxlen=max_cache_size)
         
         self.sanitizer = RegexSanitizer()
+        print(f"🧹 Harvester перманентная память загружена: {len(self.processed_hashes)} хэшей.")
     
+    # ===== 4.4.6. ДИСКОВЫЙ СЛОЙ AMORTIZATION =====
+    
+    def _load_cache_from_disk(self) -> Tuple[set, list]:
+        """Загружает хэши из файла при старте контейнера."""
+        loaded_set = set()
+        loaded_list = []
+        try:
+            if not self.cache_file.exists():
+                self.cache_file.parent.mkdir(parents=True, exist_ok=True)
+                self.cache_file.touch()
+                return loaded_set, loaded_list
+            
+            with open(self.cache_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    h_val = line.strip()
+                    if h_val and h_val not in loaded_set:
+                        loaded_set.add(h_val)
+                        loaded_list.append(h_val)
+                        
+            # Если лог на диске разросся больше лимита, берем последние max_cache_size
+            if len(loaded_list) > self.max_cache_size:
+                loaded_list = loaded_list[-self.max_cache_size:]
+                loaded_set = set(loaded_list)
+                
+        except Exception as e:
+            print(f"⚠️ Ошибка загрузки кэша дедупликатора: {e}")
+            
+        return loaded_set, loaded_list
+
+    def _sync_cache_to_disk(self):
+        """Полностью перезаписывает кэш-файл по принципу FIFO."""
+        try:
+            with open(self.cache_file, "w", encoding="utf-8") as f:
+                for h_val in self.hash_queue:
+                    f.write(f"{h_val}\n")
+        except Exception as e:
+            print(f"💥 Критическая ошибка синхронизации кэша Harvester: {e}")
+
     # ===== 4.4.1. ДЕДУПЛИКАЦИЯ =====
     
     def _compute_hash(
@@ -138,13 +141,7 @@ class Harvester:
         message_id: int,
         content: str
     ) -> str:
-        """
-        Вычисляет SHA-256 хеш сообщения.
-        
-        Хеш строится из: channel_id + message_id + content
-        Это гарантирует уникальность даже при одинаковом контенте
-        из разных каналов.
-        """
+        """Вычисляет сквозной SHA-256 хеш сообщения."""
         raw = f"{channel_id}:{message_id}:{content}"
         return hashlib.sha256(raw.encode('utf-8')).hexdigest()
     
@@ -154,53 +151,44 @@ class Harvester:
         message_id: int,
         content: str
     ) -> bool:
-        """
-        Проверяет, было ли такое сообщение уже обработано.
-        
-        Использует FIFO-кэш: при переполнении старейший хеш удаляется.
-        """
+        """Проверяет дубликаты с автоматическим сбросом на диск."""
         h = self._compute_hash(channel_id, message_id, content)
         
         if h in self.processed_hashes:
             return True
         
-        # FIFO: удаляем старейший при переполнении
+        # FIFO вытеснение
         if len(self.processed_hashes) >= self.max_cache_size:
             oldest = self.hash_queue.popleft()
             self.processed_hashes.discard(oldest)
         
         self.processed_hashes.add(h)
         self.hash_queue.append(h)
+        
+        # Потоковая запись нового хэша в лог
+        try:
+            with open(self.cache_file, "a", encoding="utf-8") as f:
+                f.write(f"{h}\n")
+        except Exception as e:
+            print(f"⚠️ Ошибка атомарной дозаписи хэша: {e}")
+            
         return False
     
-    # ===== 4.4.3. ФИЛЬТР ДЛИНЫ =====
+    # ===== 4.4.3. ФИЛЬТРЫ =====
     
     def filter_by_length(self, text: str) -> Tuple[bool, Optional[str]]:
-        """
-        Проверяет длину сообщения.
-        
-        Returns:
-            (True, None) если прошло проверку
-            (False, "TOO_SHORT") если меньше 20 символов
-            (False, "TOO_LONG") если больше 4000 символов
-        """
         if len(text) < self.min_length:
             return (False, "TOO_SHORT")
         if len(text) > self.max_length:
             return (False, "TOO_LONG")
         return (True, None)
     
-    # ===== 4.4.4. ФИЛЬТР ДАТЫ =====
-    
     def filter_by_date(self, msg_date: datetime) -> Tuple[bool, Optional[str]]:
-        """
-        Проверяет, не старше ли сообщение 24 часов.
-        
-        Returns:
-            (True, None) если свежее
-            (False, "OLD_MESSAGE") если старше 24 часов
-        """
-        if msg_date < datetime.now() - timedelta(hours=self.max_age_hours):
+        # Канон: Избавляемся от привязки к локальной таймзоне, сравниваем наивно
+        now = datetime.now()
+        if msg_date.tzinfo:
+            msg_date = msg_date.replace(tzinfo=None)
+        if msg_date < now - timedelta(hours=self.max_age_hours):
             return (False, "OLD_MESSAGE")
         return (True, None)
     
@@ -210,25 +198,11 @@ class Harvester:
         self,
         messages: List[RawMessageWithTrace]
     ) -> List[SanitizedMessage]:
-        """
-        Пропускает сообщения через все фильтры.
-        
-        Порядок обработки:
-        1. Дедупликация (SHA-256)
-        2. Regex-очистка
-        3. Фильтр длины
-        4. Фильтр даты
-        
-        Args:
-            messages: Сырые сообщения с trace_id
-        
-        Returns:
-            Очищенные сообщения, прошедшие все фильтры.
-        """
         result: List[SanitizedMessage] = []
+        initial_cache_size = len(self.processed_hashes)
         
         for msg in messages:
-            # 1. Дедупликация
+            # 1. Дедупликация (теперь сквозная и перманентная!)
             if self.is_duplicate(msg.channel_id, msg.message_id, msg.content):
                 continue
             
@@ -245,12 +219,12 @@ class Harvester:
             if not ok:
                 continue
             
-            # Все проверки пройдены
+            # Валидация пройдена
             sanitized = SanitizedMessage(
                 message_id=msg.message_id,
                 channel_id=msg.channel_id,
                 channel_name=msg.channel_name,
-                content=msg.content,  # Оригинал сохраняем
+                content=msg.content,
                 date=msg.date,
                 from_id=msg.from_id,
                 views=msg.views,
@@ -265,6 +239,10 @@ class Harvester:
             )
             result.append(sanitized)
         
+        # Если база хэшей приросла — раз в цикл делаем полную FIFO-синхронизацию файла
+        if len(self.processed_hashes) > initial_cache_size:
+            self._sync_cache_to_disk()
+            
         print(f"🧹 Harvester: {len(messages)} in → {len(result)} out "
               f"(dedup={len(messages) - len(result)})")
         
