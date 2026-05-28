@@ -77,7 +77,7 @@ class BotClient:
         if self.token and self.chat_id:
             self.api_url = f"https://api.telegram.org/bot{self.token}/sendMessage"
             # Ленивая сборка асинхронного клиента httpx с проксированием
-            self._client = httpx.AsyncClient(proxies=self.proxy_url, timeout=10.0)
+            self._client = httpx.AsyncClient(proxy=self.proxy_url, timeout=10.0)
             print(f"🤖 Beacon bot initialized (chat_id={self.chat_id[:5]}... via proxy)")
         else:
             print("⚠️ Beacon bot token or chat_id not set — alerts disabled")
