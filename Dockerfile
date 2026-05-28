@@ -1,4 +1,4 @@
-FROM python:3.13-slim
+FROM cr.yandex/mirror/python:3.13-slim
 
 LABEL maintainer="ya6101888@gmail.com"
 LABEL version="5.2.3"
