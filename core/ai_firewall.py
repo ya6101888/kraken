@@ -73,7 +73,7 @@ class AIFirewall:
             return []
 
         all_approved: List[ApprovedSignal] = []
-        batch_size = 5  # Снижаем до 5, чтобы OpenAI не обрезал JSON по max_tokens
+        batch_size = 3  # Снижаем до 5, чтобы OpenAI не обрезал JSON по max_tokens
 
         for i in range(0, len(messages), batch_size):
             batch = messages[i:i+batch_size]

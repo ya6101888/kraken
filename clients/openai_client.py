@@ -265,8 +265,11 @@ class OpenAIClient:
                             continue
                         
                         # 1. Принудительный каст этажа в строку
-                        if "floor" in od and od["floor"] is not None:
-                            od["floor"] = str(od["floor"])
+                        if "floor" in od:
+                            if od["floor"] is not None:
+                                od["floor"] = str(od["floor"]).strip()
+                            else:
+                                od["floor"] = None
                         
                         # 2. Нормализация дат вида "июнь 2026 г" -> "2026-06"
                         if "completion_date" in od and od["completion_date"]:
