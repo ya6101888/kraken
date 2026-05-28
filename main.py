@@ -248,6 +248,26 @@ async def system_status():
         "session": beacon_obj.health_status.get("session", "UNKNOWN") if beacon_obj else "UNKNOWN",
     }
 
+# ===== 5.4. РУЧНОЙ СБРОС БУФЕРА (КРАСНАЯ КНОПКА SRE 5.0) =====
+
+@app.post("/flush")
+async def manual_buffer_flush():
+    """Принудительно сбрасывает накопительный буфер сигналов в Google Sheets."""
+    if engine and hasattr(engine, '_writer') and engine._writer:
+        try:
+            await engine._writer.flush()
+            return {
+                "status": "success",
+                "message": "Буфер успешно сброшен в Google Sheets на ходу!",
+                "timestamp": datetime.now().isoformat()
+            }
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Ошибка сброса буфера: {e}")
+    else:
+        return {
+            "status": "ignored",
+            "message": "Буфер пуст или StorageWriter еще не инициализирован движком."
+        }
 
 # ===== ТОЧКА ВХОДА =====
 
