@@ -118,6 +118,8 @@ async def lifespan(app: FastAPI):
     
     # Отправляем алерт о старте
     # await beacon_obj.alert("INFO", "KRAKEN started")  # TODO: fix Beacon Bot API
+    # Безопасный асинхронный алерт без блокировки lifespan
+    asyncio.create_task(beacon_obj.alert("INFO", "🦑 KRAKEN v5.2.3 запущен и вышел в дозор!"))    
     
     yield  # Приложение работает здесь
     
