@@ -69,29 +69,28 @@ class Trigger:
     
     def start(self):
         """
-        Запускает планировщик.
-        
-        Добавляет задачу run_cycle, которая будет вызываться
-        каждые self.interval_minutes минут.
-        Первый запуск — через 15 минут (next_run_time=None даёт FastAPI загрузиться).
+        Запускает планировщик KRAKEN.
         """
+        # Предохранитель SRE 5.0: если планировщик уже запущен, выходим
+        if self.scheduler.running:
+            print("⚠️ CRON scheduler is already running! Блокируем дублирующий поток.")
+            return
+
+        # Первый запуск через 30 секунд — даём lifespan загрузиться
+        from datetime import timedelta
+        first_run = datetime.now() + timedelta(seconds=30)
+
         self.scheduler.add_job(
             self.run_cycle,
             trigger=IntervalTrigger(minutes=self.interval_minutes),
             id="mining_cycle",
             replace_existing=True,
             max_instances=1,
-            next_run_time=None  # Даём FastAPI и lifespan спокойно загрузиться!
+            next_run_time=first_run  # Автостарт через 30 секунд!
         )
         self.scheduler.start()
-        print(f"✅ CRON scheduler started (interval={self.interval_minutes}min)")
-    
-    def stop(self):
-        """Останавливает планировщик."""
-        if self.scheduler.running:
-            self.scheduler.shutdown(wait=False)
-            print("🛑 Scheduler stopped")
-    
+        print(f"✅ CRON scheduler started (interval={self.interval_minutes}min, first_run scheduled at {first_run.strftime('%H:%M:%S')})")
+        
     # ===== 4.1.2. LOCK-ФАЙЛ =====
     
     LOCK_PATH = "/tmp/kraken.lock"
