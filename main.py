@@ -83,11 +83,16 @@ async def lifespan(app: FastAPI):
     print("🎯 Initializing engine...")
     engine = Engine(channel_manager)
     print("✅ Engine ready")
-    
-    # 5. Инициализация Beacon
+
+    # 5. Инициализация Beacon (ДО тяжёлых компонентов!)
     from core.beacon import Beacon
     print("🚨 Initializing beacon...")
-    beacon_obj = Beacon(engine, channel_manager)
+    beacon_obj = Beacon(None, None)  # Ленивая инициализация — engine и channel_manager будут добавлены позже
+    beacon_obj._engine = engine  # Подключаем engine после его создания
+    beacon_obj._channel_manager = channel_manager  # Подключаем channel_manager
+    
+    # Стреляем стартовым алертом в первую секунду жизни контейнера!
+    asyncio.create_task(beacon_obj.alert("INFO", "🦑 KRAKEN v5.2.3 запущен и вышел в дозор!"))
     print("✅ Beacon ready")
     
     # 6. Запуск фоновых задач
