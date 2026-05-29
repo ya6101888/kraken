@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, model_validator
 
 
 # ==========================================
-# 1. IMMUTABLE ENUMS (ГЕО, СЕГМЕНТЫ И СТАТУСЫ КАНАЛОВ)
+# 1. IMMUTABLE ENUMS (ГЕО, СЕГМЕНТЫ И СТАТУСЫ)
 # ==========================================
 
 class MarketSegment(str, Enum):
@@ -53,7 +53,7 @@ class ChannelTier(int, Enum):
 
 
 # ==========================================
-# 2. РЕЕСТР КАНАЛОВ (СОВМЕСТИМОСТЬ С КАНАЛ-МЕНЕДЖЕРОМ)
+# 2. РЕЕСТР КАНАЛОВ (СОВМЕСТИМОСТЬ)
 # ==========================================
 
 class ChannelRegistryEntry(BaseModel):
@@ -127,8 +127,48 @@ class ApprovedSignal(BaseModel):
 
 
 # ==========================================
-# 5. СЛУЖЕБНЫЕ ЛОГИ (МИНЕР И СИСТЕМА)
+# 5. СЛУЖЕБНЫЕ ЛОГИ (МИНЕР, СТРАЖ И СТАРЫЕ СЛОВАРНЫЕ СХЕМЫ)
 # ==========================================
+
+class GoogleSheetsRow(BaseModel):
+    """
+    Плоская модель для обратной совместимости со слоем StorageWriter.
+    Расширена до 23 колонок для предотвращения ValidationError в рантайме v1.2.
+    """
+    signal_id: str = ""
+    trace_id: str = ""
+    channel_name: str = ""
+    message_id: int = 0
+    classification: Optional[str] = None
+    segment_confidence: float = 1.0
+    source_type: str = "AGENCY"
+    source_tier: int = 3
+    geo_focus: Optional[str] = None
+    priority_score: float = 0.0
+    object_price: Optional[int] = None
+    object_address: Optional[str] = None
+    object_rooms: Optional[int] = None
+    object_area: Optional[float] = None
+    object_floor: Optional[str] = None
+    object_developer: Optional[str] = None
+    object_completion_date: Optional[str] = None
+    original_content: str = ""
+    cleaned_content: str = ""
+    relevance_score: float = 0.0
+    collected_at: datetime = Field(default_factory=datetime.now)
+    is_approved: bool = True
+    wf06_used_at: Optional[datetime] = None
+
+    # Поля старого плоского контракта (сохраняем, чтобы не упал старый импорт)
+    content: Optional[str] = None
+    market_segment: Optional[str] = None
+    price: Optional[int] = None
+    rooms: Optional[int] = None
+    area: Optional[float] = None
+    floor: Optional[str] = None
+    address: Optional[str] = None
+    developer: Optional[str] = None
+    completion_date: Optional[str] = None
 
 class SanitizedMessage(BaseModel):
     """Промежуточный DTO после очистки Harvester."""
