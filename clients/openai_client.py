@@ -3,25 +3,20 @@ KRAKEN OpenAI Client — AI-классификатор сигналов.
 
 Фаза 3: ИНТЕГРАЦИИ
 Модуль: 3.2 openai_client.py
-Версия: v5.2.9 (SRE 5.0 ASYNC GATHER — SYNC MASTER)
-Дата/Время стабилизации: 2026-05-29 22:45:00 UTC
-
-Принципы SRE 5.0 Canon:
-- SIMPLE = SYSTEM = ГЕНИАЛЬНО.
-- Полная синхронизация структуры данных с platinum_prompt.txt (ключ "results").
-- Сохранение структуры '\n' для корректной работы семантического сита.
+Версия: v5.2.10 (SRE 5.0 RUNTIME ADAPTER — FINAL MASTER)
+Дата/Время стабилизации: 2026-05-29 22:55:00 UTC
 """
 
 import os
 import json
 import asyncio
 import sys
+import re
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Dict
 from dotenv import load_dotenv
 
-# ===== ИНИЦИАЛИЗАЦИЯ ОКРУЖЕНИЯ =====
 env_path = Path("/opt/kraken/secrets/.env")
 if env_path.exists():
     load_dotenv(env_path)
@@ -32,13 +27,11 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 def log_sre(message: str):
-    """Каноничный потокобезопасный логгер без буферизации."""
     sys.stdout.write(f"[{datetime.now().isoformat()}] {message}\n")
     sys.stdout.flush()
 
 
 class TokenBudget:
-    """SRE-Предохранитель бюджета API."""
     def __init__(self, daily_limit: int = 500_000):
         self.daily_limit = daily_limit
         self.consumed_today = 0
@@ -65,7 +58,7 @@ class OpenAIClient:
         self.model = os.getenv("AI_MODEL_NAME", "gpt-4o-mini")
         self.temperature = 0.1
         self.max_tokens = 800
-        self.timeout = 25  # Предельный таймаут на параллельную транзакцию
+        self.timeout = 25
         self.retry_attempts = 1
         self.token_budget = TokenBudget()
         self.platinum_prompt = self._load_prompt()
@@ -73,7 +66,6 @@ class OpenAIClient:
     
     @property
     def client(self):
-        """Инициализация асинхронного клиента через пул Squid proxy."""
         if self._async_client is None:
             from openai import AsyncOpenAI
             import httpx
@@ -109,9 +101,7 @@ class OpenAIClient:
         raise FileNotFoundError("❌ Critical error: prompts/platinum_prompt.txt not found!")
 
     async def _process_single_message_async(self, idx: int, msg: str) -> List[Dict]:
-        """Изолированная атомарная транзакция разбора одного объявления."""
-        # Санитизация: Меняем только двойные кавычки, ломающие JSON. 
-        # Переносы строк '\n' оставляем! Для ИИ критически важна разбивка на строки!
+        """Изолированная атомарная транзакция с нативной runtime-адаптацией типов."""
         clean_in = msg.replace('"', "'").replace('\r', '').strip()
         batch_request = [{"message_index": 0, "content": clean_in[:4000]}]
         
@@ -134,19 +124,36 @@ class OpenAIClient:
             raw_content = response.choices[0].message.content
             data = json.loads(raw_content)
             
-            # СИНХРОНИЗАЦИЯ: Читаем строго ключ "results", прописанный в ТЗ и промпте v1.2
             signals = data.get("results", [])
             if isinstance(signals, list):
+                valid_signals = []
                 for sig in signals:
-                    # Привязываем реальный индекс сообщения в пачке
                     sig["message_index"] = idx
-                return signals
+                    
+                    # ===== SRE RUNTIME ADAPTER: ВЫПРЯМЛЯЕМ ТИПЫ ДАННЫХ ДЛЯ PYDANTIC =====
+                    source = sig.get("source", {})
+                    if isinstance(source, dict):
+                        # 1. Защита source_type Enum
+                        st = str(source.get("source_type", "")).upper()
+                        if st not in ['ANALYTIC', 'DEVELOPER', 'NEWS', 'AGENCY', 'PRIVATE']:
+                            source["source_type"] = "AGENCY" # Безопасный дефолт по канону ТЗ
+                        
+                        # 2. Защита source_tier Int (Парсим 'TIER_1' -> 1 или оставляем int)
+                        tier_raw = source.get("source_tier", 3)
+                        if isinstance(tier_raw, str):
+                            digits = re.findall(r'\d+', tier_raw)
+                            source["source_tier"] = int(digits[0]) if digits else 3
+                        else:
+                            source["source_tier"] = int(tier_raw) if tier_raw else 3
+                            
+                    valid_signals.append(sig)
+                return valid_signals
         except Exception:
             pass
         return []
 
     async def classify_batch(self, messages: List[str]) -> Optional[Dict]:
-        """Параллельный неблокирующий обстрел OpenAI через asyncio.gather."""
+        """Параллельный неблокирующий обстрел OpenAI с адаптацией типов."""
         if not self.api_key:
             log_sre("⚠️ OPENAI_API_KEY not set")
             return None
@@ -154,22 +161,15 @@ class OpenAIClient:
         if not messages:
             return {"signals": []}
 
-        log_sre(f"🧠 ИИ-Файрволл: Запуск СИНХРОНИЗИРОВАННОГО параллельного пула для {len(messages)} сообщений.")
+        log_sre(f"🧠 ИИ-Файрволл: Запуск СИНХРОНИЗИРОВАННОГО пула с Runtime-Адаптером Pydantic для {len(messages)} сообщений.")
         
-        # Генерация массива независимых задач
         tasks = [self._process_single_message_async(idx, msg) for idx, msg in enumerate(messages)]
-        
-        # Одновременный асинхронный выстрел
         results = await asyncio.gather(*tasks)
         
-        # Сборка результатов в плоский список DTO
         combined_signals = []
         for sublist in results:
             if sublist:
                 combined_signals.extend(sublist)
                 
-        log_sre(f"✅ Параллельный раунд завершен. Извлечено {len(combined_signals)} валидных сигналов из {len(messages)} сообщений.")
-        
-        # Возвращаем контракт "signals" для внешнего StorageWriter, 
-        # внутренний клинч ключей полностью изолирован внутри модуля!
+        log_sre(f"✅ Параллельный раунд завершен. Извлечено {len(combined_signals)} аппаратно-совместимых сигналов из {len(messages)} сообщений.")
         return {"signals": combined_signals}
