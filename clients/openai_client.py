@@ -3,8 +3,13 @@ KRAKEN OpenAI Client — AI-классификатор сигналов.
 
 Фаза 3: ИНТЕГРАЦИИ
 Модуль: 3.2 openai_client.py
-Версия: v5.2.8 (SRE 5.0 ASYNC GATHER POOL — GOLDEN MASTER)
-Дата/Время стабилизации: 2026-05-29 22:30:00 UTC
+Версия: v5.2.9 (SRE 5.0 ASYNC GATHER — SYNC MASTER)
+Дата/Время стабилизации: 2026-05-29 22:45:00 UTC
+
+Принципы SRE 5.0 Canon:
+- SIMPLE = SYSTEM = ГЕНИАЛЬНО.
+- Полная синхронизация структуры данных с platinum_prompt.txt (ключ "results").
+- Сохранение структуры '\n' для корректной работы семантического сита.
 """
 
 import os
@@ -16,6 +21,7 @@ from datetime import datetime
 from typing import List, Optional, Dict
 from dotenv import load_dotenv
 
+# ===== ИНИЦИАЛИЗАЦИЯ ОКРУЖЕНИЯ =====
 env_path = Path("/opt/kraken/secrets/.env")
 if env_path.exists():
     load_dotenv(env_path)
@@ -26,11 +32,13 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 def log_sre(message: str):
+    """Каноничный потокобезопасный логгер без буферизации."""
     sys.stdout.write(f"[{datetime.now().isoformat()}] {message}\n")
     sys.stdout.flush()
 
 
 class TokenBudget:
+    """SRE-Предохранитель бюджета API."""
     def __init__(self, daily_limit: int = 500_000):
         self.daily_limit = daily_limit
         self.consumed_today = 0
@@ -57,7 +65,7 @@ class OpenAIClient:
         self.model = os.getenv("AI_MODEL_NAME", "gpt-4o-mini")
         self.temperature = 0.1
         self.max_tokens = 800
-        self.timeout = 25  # Лимит на индивидуальный параллельный запрос
+        self.timeout = 25  # Предельный таймаут на параллельную транзакцию
         self.retry_attempts = 1
         self.token_budget = TokenBudget()
         self.platinum_prompt = self._load_prompt()
@@ -65,6 +73,7 @@ class OpenAIClient:
     
     @property
     def client(self):
+        """Инициализация асинхронного клиента через пул Squid proxy."""
         if self._async_client is None:
             from openai import AsyncOpenAI
             import httpx
@@ -77,8 +86,7 @@ class OpenAIClient:
             if proxy_ip and proxy_port:
                 proxy_auth = f"{proxy_user}:{proxy_pass}@" if proxy_user and proxy_pass else ""
                 proxy_url = f"http://{proxy_auth}{proxy_ip}:{proxy_port}"
-                log_sre(f"🛡️ OpenAI Client: Активирован параллельный шлюз Squid -> {proxy_ip}:{proxy_port}")
-                # Увеличием пул соединений (limits) для параллельного обстрела API
+                log_sre(f"🛡️ OpenAI Client: Подключение параллельного пула Squid -> {proxy_ip}:{proxy_port}")
                 limits = httpx.Limits(max_keepalive_connections=50, max_connections=100)
                 self._http_client = httpx.AsyncClient(proxy=proxy_url, timeout=self.timeout, limits=limits)
                 self._async_client = AsyncOpenAI(api_key=self.api_key, http_client=self._http_client)
@@ -101,8 +109,10 @@ class OpenAIClient:
         raise FileNotFoundError("❌ Critical error: prompts/platinum_prompt.txt not found!")
 
     async def _process_single_message_async(self, idx: int, msg: str) -> List[Dict]:
-        """Изолированная атомарная транзакция для одного сообщения."""
-        clean_in = msg.replace('"', "'").replace('\n', ' ').replace('\r', ' ').strip()
+        """Изолированная атомарная транзакция разбора одного объявления."""
+        # Санитизация: Меняем только двойные кавычки, ломающие JSON. 
+        # Переносы строк '\n' оставляем! Для ИИ критически важна разбивка на строки!
+        clean_in = msg.replace('"', "'").replace('\r', '').strip()
         batch_request = [{"message_index": 0, "content": clean_in[:4000]}]
         
         client = self.client
@@ -111,7 +121,7 @@ class OpenAIClient:
                 client.chat.completions.create(
                     model=self.model,
                     messages=[
-                        {"role": "system", "content": self.platinum_prompt + "\nSTRICT JSON RULE: Return valid JSON object. Text fields must use single quotes instead of double quotes."},
+                        {"role": "system", "content": self.platinum_prompt},
                         {"role": "user", "content": json.dumps(batch_request, ensure_ascii=False)}
                     ],
                     temperature=self.temperature,
@@ -124,9 +134,11 @@ class OpenAIClient:
             raw_content = response.choices[0].message.content
             data = json.loads(raw_content)
             
-            signals = data.get("signals", [])
+            # СИНХРОНИЗАЦИЯ: Читаем строго ключ "results", прописанный в ТЗ и промпте v1.2
+            signals = data.get("results", [])
             if isinstance(signals, list):
                 for sig in signals:
+                    # Привязываем реальный индекс сообщения в пачке
                     sig["message_index"] = idx
                 return signals
         except Exception:
@@ -142,19 +154,22 @@ class OpenAIClient:
         if not messages:
             return {"signals": []}
 
-        log_sre(f"🧠 ИИ-Файрволл: Запуск ПАРАЛЛЕЛЬНОГО пула для {len(messages)} сообщений.")
+        log_sre(f"🧠 ИИ-Файрволл: Запуск СИНХРОНИЗИРОВАННОГО параллельного пула для {len(messages)} сообщений.")
         
-        # Создаем массив корутин для одновременного выполнения
+        # Генерация массива независимых задач
         tasks = [self._process_single_message_async(idx, msg) for idx, msg in enumerate(messages)]
         
-        # Запускаем тотальный параллельный штурм
+        # Одновременный асинхронный выстрел
         results = await asyncio.gather(*tasks)
         
-        # Схлопываем результаты из всех тасок в единый плоский список сигналов
+        # Сборка результатов в плоский список DTO
         combined_signals = []
         for sublist in results:
             if sublist:
                 combined_signals.extend(sublist)
                 
         log_sre(f"✅ Параллельный раунд завершен. Извлечено {len(combined_signals)} валидных сигналов из {len(messages)} сообщений.")
+        
+        # Возвращаем контракт "signals" для внешнего StorageWriter, 
+        # внутренний клинч ключей полностью изолирован внутри модуля!
         return {"signals": combined_signals}
