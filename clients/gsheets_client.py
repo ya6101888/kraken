@@ -3,7 +3,7 @@ KRAKEN Google Sheets Client — Запись сигналов в таблицы.
 
 Фаза 3: ИНТЕГРАЦИИ
 Модуль: 3.3 gsheets_client.py
-Версия: v5.2.3 (GOLDEN SRE 5.0 Edition)
+Версия: v5.2.3 (GOLDEN SRE 5.0 Edition v1.2)
 
 Принципы:
 - Авторизация через service_account.json
@@ -96,9 +96,6 @@ class GoogleSheetsClient:
     def load_channels(self) -> List[Dict]:
         """
         Загружает реестр каналов из листа tg_channels.
-        
-        Returns:
-            Список каналов со статусом ACTIVE.
         """
         if not self.is_available:
             return []
@@ -134,32 +131,41 @@ class GoogleSheetsClient:
             if signals and isinstance(signals[0], list):
                 rows = signals
             else:
-                # Резервный фоллбэк для обратной совместимости старого кода
+                # Резервный фоллбэк v1.2 для сквозной безопасности рантайма
                 rows = []
                 for signal in signals:
+                    s_type = signal.source.source_type.value if hasattr(signal.source, 'source_type') and hasattr(signal.source.source_type, 'value') else str(getattr(signal, 'source_type', ''))
+                    s_tier = signal.source.source_tier if hasattr(signal.source, 'source_tier') else int(getattr(signal, 'source_tier', 3))
+                    
                     row = [
                         getattr(signal, 'signal_id', ''),
                         getattr(signal, 'trace_id', ''),
                         getattr(signal, 'channel_name', ''),
                         getattr(signal, 'message_id', 0),
-                        getattr(signal, 'content', ''),
+                        signal.classification.value if hasattr(signal.classification, 'value') else str(getattr(signal, 'classification', '')),
+                        getattr(signal, 'segment_confidence', 1.0),
+                        s_type,
+                        s_tier,
+                        signal.geo.value if hasattr(signal.geo, 'value') else str(getattr(signal, 'geo_focus', '')),
+                        getattr(signal, 'priority_score', 0.0),
+                        signal.object_data.price if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'price', None),
+                        signal.object_data.address if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'address', None),
+                        signal.object_data.rooms if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'rooms', None),
+                        signal.object_data.area if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'area', None),
+                        signal.object_data.floor if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'floor', None),
+                        signal.object_data.developer if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'developer', None),
+                        signal.object_data.completion_date if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'completion_date', None),
+                        getattr(signal, 'original_content', getattr(signal, 'content', '')),
+                        getattr(signal, 'cleaned_content', ''),
                         getattr(signal, 'relevance_score', 0.0),
-                        getattr(signal, 'market_segment', ''),
-                        getattr(signal, 'geo_focus', ''),
-                        getattr(signal, 'price', ''),
-                        getattr(signal, 'rooms', ''),
-                        getattr(signal, 'area', ''),
-                        getattr(signal, 'floor', ''),
-                        getattr(signal, 'address', ''),
-                        getattr(signal, 'developer', ''),
-                        getattr(signal, 'completion_date', ''),
-                        getattr(signal, 'collected_at', datetime.now()).isoformat() if hasattr(signal, 'collected_at') else '',
-                        getattr(signal, 'wf06_used_at', datetime.now()).isoformat() if hasattr(signal, 'wf06_used_at') and signal.wf06_used_at else ''
+                        signal.collected_at.isoformat() if hasattr(signal, 'collected_at') and hasattr(signal.collected_at, 'isoformat') else str(datetime.now().isoformat()),
+                        getattr(signal, 'is_approved', True),
+                        signal.wf06_used_at.isoformat() if hasattr(signal, 'wf06_used_at') and signal.wf06_used_at and hasattr(signal.wf06_used_at, 'isoformat') else ""
                     ]
                     rows.append(row)
             
             worksheet.append_rows(rows, value_input_option="USER_ENTERED")
-            print(f"📊 Written {len(rows)} signals to Google Sheets")
+            print(f"📊 Written {len(rows)} signals to Google Sheets (23 columns configuration)")
             return True
             
         except Exception as e:
@@ -169,16 +175,13 @@ class GoogleSheetsClient:
     # ===== 3.3.4. ЗАПИСЬ ЛОГА =====
     
     def write_mining_log(self, log: MiningCycleLog) -> bool:
-        """
-        Записывает лог цикла сбора в лист tg_mining_log.
-        """
+        """Записывает лог цикла сбора в лист tg_mining_log."""
         if not self.is_available:
             return False
         
         try:
             sheet = self.client.open_by_key(self.spreadsheet_id)
             worksheet = sheet.worksheet("tg_mining_log")
-            
             errors_json = json.dumps(log.errors, ensure_ascii=False) if log.errors else ""
             
             row = [
@@ -204,10 +207,7 @@ class GoogleSheetsClient:
     # ===== 3.3.5. RETRY С EXPONENTIAL BACKOFF =====
     
     async def write_with_retry(self, signals: List) -> bool:
-        """
-        Пытается записать сигналы с повторными попытками.
-        Retry: 3 попытки с exponential backoff: 1с, 2с, 4с + jitter.
-        """
+        """Retry: 3 попытки с exponential backoff: 1с, 2с, 4с + jitter."""
         if not signals:
             return True
         
@@ -259,14 +259,9 @@ class GoogleSheetsClient:
 class BufferedWriter:
     """
     Буфер для накопления сигналов перед записью стандарта SRE 5.0 v1.2.
-    
-    - Динамический размер max_size из core.config.settings
-    - При заполнении — flush в Google Sheets
-    - При ошибке — сохранение в DLQ
     """
     
     def __init__(self, max_size: Optional[int] = None):
-        # Хирургический проброс: если размер не передан, берем из Pydantic settings
         from core.config import settings
         self.max_size = max_size or getattr(settings, "GSHEETS_BUFFER_SIZE", 100)
         
@@ -276,14 +271,12 @@ class BufferedWriter:
             "/opt/kraken/dlq/failed_writes.json"
         ))
         
-        # Корректировка пути для изоляции томов Debian
         if str(self.dlq_path).startswith("/app/") and not Path("/app").exists():
             self.dlq_path = Path("/opt/kraken") / self.dlq_path.relative_to("/app")
             
         print(f"📦 BufferedWriter initialized with max_size={self.max_size}")
     
     async def add(self, signal: ApprovedSignal, writer: GoogleSheetsClient):
-        """Добавляет сигнал в буфер. Если буфер полон — flush."""
         self.buffer.append(signal)
         if len(self.buffer) >= self.max_size:
             await self.flush(writer)
@@ -295,10 +288,8 @@ class BufferedWriter:
         
         print(f"📤 Flushing {len(self.buffer)} signals...")
         
-        # Перемапливаем наши вложенные структуры ApprovedSignal в плоские строки по чертежу твоего сна
         flat_rows = []
         for signal in self.buffer:
-            # Предотвращаем падение, если часть полей v1.2 временно отсутствует в рантайме
             s_type = signal.source.source_type.value if hasattr(signal.source, 'source_type') and hasattr(signal.source.source_type, 'value') else str(getattr(signal, 'source_type', ''))
             s_tier = signal.source.source_tier if hasattr(signal.source, 'source_tier') else int(getattr(signal, 'source_tier', 3))
             
@@ -313,19 +304,19 @@ class BufferedWriter:
                 s_tier,
                 signal.geo.value if hasattr(signal.geo, 'value') else str(signal.geo),
                 signal.priority_score,
-                signal.object_data.price if hasattr(signal, 'object_data') else getattr(signal, 'price', None),
-                signal.object_data.address if hasattr(signal, 'object_data') else getattr(signal, 'address', None),
-                signal.object_data.rooms if hasattr(signal, 'object_data') else getattr(signal, 'rooms', None),
-                signal.object_data.area if hasattr(signal, 'object_data') else getattr(signal, 'area', None),
-                signal.object_data.floor if hasattr(signal, 'object_data') else getattr(signal, 'floor', None),
-                signal.object_data.developer if hasattr(signal, 'object_data') else getattr(signal, 'developer', None),
-                signal.object_data.completion_date if hasattr(signal, 'object_data') else getattr(signal, 'completion_date', None),
+                signal.object_data.price if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'price', None),
+                signal.object_data.address if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'address', None),
+                signal.object_data.rooms if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'rooms', None),
+                signal.object_data.area if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'area', None),
+                signal.object_data.floor if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'floor', None),
+                signal.object_data.developer if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'developer', None),
+                signal.object_data.completion_date if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'completion_date', None),
                 signal.original_content,
                 signal.cleaned_content,
                 signal.relevance_score,
                 signal.collected_at.isoformat() if hasattr(signal.collected_at, 'isoformat') else str(signal.collected_at),
                 signal.is_approved,
-                signal.wf06_used_at.isoformat() if hasattr(signal, 'wf06_used_at') and signal.wf06_used_at else ""
+                signal.wf06_used_at.isoformat() if hasattr(signal, 'wf06_used_at') and signal.wf06_used_at and hasattr(signal.wf06_used_at, 'isoformat') else ""
             ]
             flat_rows.append(row)
             
@@ -339,7 +330,6 @@ class BufferedWriter:
             self.buffer.clear()
             
     async def _save_to_dlq(self):
-        """Сохраняет неудавшиеся записи в Dead Letter Queue."""
         entries = []
         if self.dlq_path.exists():
             try:
@@ -362,6 +352,5 @@ class BufferedWriter:
         print(f"💀 {len(self.buffer)} signals saved to DLQ: {self.dlq_path}")
         
     async def shutdown(self, writer: GoogleSheetsClient):
-        """Принудительный flush при остановке контейнера."""
         print(f"🛑 Shutdown: flushing {len(self.buffer)} buffered signals")
         await self.flush(writer)
