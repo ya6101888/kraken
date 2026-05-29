@@ -104,7 +104,7 @@ async def lifespan(app: FastAPI):
     # Гарантированный сквозной набат. Если прокси лежит — мы увидим ошибку при старте!
     try:
         log_sre("📤 Sending synchronous startup contract alert to Telegram...")
-        await beacon_obj.send_alert(
+        await beacon_obj.alert(
             severity="INFO",
             message="🚨 KRAKEN v5.2.3 RELEASE LIVE\n\n• Статус: СЕТЬ СТАБИЛЬНА\n• Контракт: Вложенный DTO v1.2 активирован\n• Контур: Точка входа main.py стабилизирована\n\n⚙️ Деталь пошла по конвейеру, Архитектор!"
         )
