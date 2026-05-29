@@ -4,11 +4,12 @@ KRAKEN Storage Writer — Запись сигналов в Google Sheets.
 Фаза 4: ЯДЕРНЫЕ КОМПОНЕНТЫ
 Модуль: 4.6 storage_writer.py
 Версия: v5.2.3 (GOLDEN MASTER SRE 5.0 Canon)
-Дата/Время стабилизации: 2026-05-29 19:30:00 UTC
+Дата/Время стабилизации: 2026-05-29 19:45:00 UTC
 
 Принципы:
 - Конвертация ApprovedSignal (вложенный v1.2) → GoogleSheetsRow (плоский контракт)
 - Ленивая инициализация буфера и клиента
+- Ограничение буфера max_size=10 для баланса скорости и защиты от квот Google API
 - Потокобезопасный слив буфера при Graceful Shutdown
 - Полная обратная совместимость вызовов фабрики
 """
@@ -56,7 +57,8 @@ class StorageWriter:
         """Ленивая инициализация накопительного буфера."""
         if self._buffer is None:
             from clients.gsheets_client import BufferedWriter
-            self._buffer = BufferedWriter(max_size=100)
+            # Архитектурный лимит: 10 записей для баланса real-time и лимитов API
+            self._buffer = BufferedWriter(max_size=10) 
         return self._buffer
     
     # ===== 4.6.6. КАНОНИЧЕСКАЯ КОНВЕРТАЦИЯ (ВЫПРЯМЛЕНИЕ DTO v1.2) =====
@@ -114,14 +116,13 @@ class StorageWriter:
     async def write_signals(self, signals: List[ApprovedSignal]) -> bool:
         """
         Записывает сигналы в Google Sheets через буфер.
-        Когда буфер заполняется (100 записей) — автоматический flush.
+        Когда буфер заполняется (10 записей) — автоматический flush.
         """
         if not signals:
             return True
         
         try:
             for signal in signals:
-                # Используем алиас обратной совместимости
                 row = self.from_approved_signal(signal)
                 await self.buffer.add(row, self.gsheets)
             
