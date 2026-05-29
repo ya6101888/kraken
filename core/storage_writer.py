@@ -3,15 +3,8 @@ KRAKEN Storage Writer — Запись сигналов в Google Sheets.
 
 Фаза 4: ЯДЕРНЫЕ КОМПОНЕНТЫ
 Модуль: 4.6 storage_writer.py
-Версия: v5.2.3 (GOLDEN MASTER SRE 5.0 Canon)
-Дата/Время стабилизации: 2026-05-29 19:45:00 UTC
-
-Принципы:
-- Конвертация ApprovedSignal (вложенный v1.2) → GoogleSheetsRow (плоский контракт)
-- Ленивая инициализация буфера и клиента
-- Ограничение буфера max_size=10 для баланса скорости и защиты от квот Google API
-- Потокобезопасный слив буфера при Graceful Shutdown
-- Полная обратная совместимость вызовов фабрики
+Версия: v5.2.12 (SRE 5.0 CORE SYNCHRONIZED — BUFFER COMPATIBLE)
+Дата/Время стабилизации: 2026-05-29 23:10:00 UTC
 """
 
 import sys
@@ -35,10 +28,6 @@ class StorageWriter:
     """
     
     def __init__(self, gsheets_client=None):
-        """
-        Args:
-            gsheets_client: GoogleSheetsClient (будет создан при первом использовании)
-        """
         self._gsheets_client = gsheets_client
         self._buffer = None
         self.total_written: int = 0
@@ -69,7 +58,8 @@ class StorageWriter:
         Преобразует сложный вложенный ApprovedSignal v1.2 в плоский GoogleSheetsRow
         для корректной вставки в 23 колонки таблицы Google Sheets.
         """
-        return GoogleSheetsRow(
+        # Сборка плоского объекта строки
+        row = GoogleSheetsRow(
             signal_id=signal.signal_id,
             trace_id=signal.trace_id,
             channel_name=signal.channel_name,
@@ -105,6 +95,13 @@ class StorageWriter:
             developer=signal.object_data.developer,
             completion_date=signal.object_data.completion_date
         )
+        
+        # ===== SRE ЗАЩИТНЫЙ ЭКРАН: ПРОБРОС ДИНАМИЧЕСКИХ СВОЙСТВ ДЛЯ БУФЕРА ШУРИКА =====
+        # Если BufferedWriter внутри вызывает row.source или row.geo — мы отдаем оригиналы
+        object.__setattr__(row, 'source', signal.source)
+        object.__setattr__(row, 'geo', signal.geo)
+        
+        return row
 
     @staticmethod
     def from_approved_signal(signal: ApprovedSignal) -> GoogleSheetsRow:
