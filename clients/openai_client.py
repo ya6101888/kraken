@@ -3,8 +3,8 @@ KRAKEN OpenAI Client — AI-классификатор сигналов.
 
 Фаза 3: ИНТЕГРАЦИИ
 Модуль: 3.2 openai_client.py
-Версия: v5.2.4 (SRE 5.0 MAX POTENCY)
-Дата/Время стабилизации: 2026-05-29 20:00:00 UTC
+Версия: v5.2.5 (SRE 5.0 SHIELD REINFORCED)
+Дата/Время стабилизации: 2026-05-29 21:58:00 UTC
 """
 
 import os
@@ -100,7 +100,7 @@ class OpenAIClient:
         raise FileNotFoundError("❌ Critical error: prompts/platinum_prompt.txt not found on disk!")
 
     async def classify_batch(self, messages: List[str]) -> Optional[Dict]:
-        """Обрабатывает ВСЕ сообщения, деля их на безопасные чанки."""
+        """Обрабатывает ВСЕ сообщения, деля их на безопасные чанки с защитой от JSONDecodeError."""
         if not self.api_key:
             log_sre("⚠️ OPENAI_API_KEY not set")
             return None
@@ -117,7 +117,12 @@ class OpenAIClient:
         client = self.client
 
         for chunk_idx, chunk in enumerate(chunks):
-            batch_request = [{"message_index": idx, "content": msg[:4000]} for idx, msg in enumerate(chunk)]
+            # Санитизация: экранируем ломающие JSON-структуру кавычки и переносы
+            batch_request = []
+            for idx, msg in enumerate(chunk):
+                safe_msg = msg.replace('"', '\\"').replace('\n', ' ').replace('\r', '')
+                batch_request.append({"message_index": idx, "content": safe_msg[:4000]})
+                
             estimated_tokens = sum(len(msg) for msg in chunk) // 4 + 1500
             
             if not self.token_budget.can_consume(estimated_tokens):
@@ -131,7 +136,10 @@ class OpenAIClient:
                         client.chat.completions.create(
                             model=self.model,
                             messages=[
-                                {"role": "system", "content": self.platinum_prompt},
+                                {
+                                    "role": "system", 
+                                    "content": self.platinum_prompt + "\n\nCRITICAL SYSTEM REQUIREMENT:\nYou must strictly escape all double quotes inside text fields of the output JSON! Ensure the payload is a perfectly valid and complete JSON object without any syntax breaks."
+                                },
                                 {"role": "user", "content": json.dumps(batch_request, ensure_ascii=False)}
                             ],
                             temperature=self.temperature,
@@ -148,8 +156,15 @@ class OpenAIClient:
                     # Собираем сигналы из чанка
                     if "signals" in data and isinstance(data["signals"], list):
                         combined_signals.extend(data["signals"])
+                        log_sre(f"✅ Чанк #{chunk_idx + 1} успешно обработан. Извлечено {len(data['signals'])} сигналов.")
                     break
                     
+                except json.JSONDecodeError as jde:
+                    log_sre(f"🔴 Чанк #{chunk_idx + 1} Сбой парсинга JSON (Попытка {attempt + 1}/{max_retries + 1}): {jde}")
+                    if attempt < max_retries:
+                        await asyncio.sleep((attempt + 1) * 3)
+                    else:
+                        log_sre(f"💀 Чанк #{chunk_idx + 1} окончательно потерян из-за JSONDecodeError.")
                 except Exception as e:
                     log_sre(f"🔴 OpenAI Сбой на чанке #{chunk_idx + 1} (Попытка {attempt + 1}/{max_retries + 1}): {type(e).__name__}: {e}")
                     if attempt < max_retries:
