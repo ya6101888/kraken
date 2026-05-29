@@ -15,16 +15,16 @@ from pydantic import BaseModel, Field, model_validator
 
 
 # ==========================================
-# 1. IMMUTABLE ENUMS
+# 1. IMMUTABLE ENUMS (ГЕО, СЕГМЕНТЫ, СТАТУСЫ И ОТК)
 # ==========================================
 
 class MarketSegment(str, Enum):
-    PRIMARY = "PRIMARY"
-    SECONDARY = "SECONDARY"
-    RENT = "RENT"
-    INVEST = "INVEST"
-    PRO = "PRO"
-    NULL = "NULL"
+    PRIMARY = "PRIMARY"      # Новостройки
+    SECONDARY = "SECONDARY"  # Вторичка
+    RENT = "RENT"            # Аренда
+    INVEST = "INVEST"        # Инвестиции
+    PRO = "PRO"              # Проф. аналитика ЮФО
+    NULL = "NULL"            # Не определен
 
 class GeoFocus(str, Enum):
     ROSTOV_CITY = "ROSTOV_CITY"
@@ -52,6 +52,14 @@ class ChannelTier(int, Enum):
     TIER_4 = 4
     TIER_5 = 5
 
+class RejectReason(str, Enum):
+    """Причины отбраковки сообщения спам-фильтром Harvester."""
+    DUPLICATE = "DUPLICATE"
+    SHORT_TEXT = "SHORT_TEXT"
+    MUTED_KEYWORD = "MUTED_KEYWORD"
+    NO_DATA = "NO_DATA"
+    SPAM = "SPAM"
+
 
 # ==========================================
 # 2. СТАРЫЕ МОДЕЛИ (ПОЛНАЯ ОБРАТНАЯ СОВМЕСТИМОСТЬ)
@@ -64,23 +72,23 @@ class RawTelegramMessage(BaseModel):
     channel_name: str = Field(min_length=1, max_length=200)
     content: str = Field(max_length=10000)
     date: datetime
-    from_id: int | None = Field(default=None)
-    views: int | None = Field(default=None, ge=0)
+    from_id: Optional[int] = Field(default=None)
+    views: Optional[int] = Field(default=None, ge=0)
 
 class RawMessageWithTrace(RawTelegramMessage):
-    """Сообщение с trace_id."""
+    """Сообщение со сквозным trace_id."""
     trace_id: str = Field(pattern=r"^KRAKEN_\d{8}_\d{6}_[a-f0-9]{8}$")
     collected_at: datetime = Field(default_factory=datetime.now)
 
 class SanitizedMessage(RawMessageWithTrace):
-    """Сообщение после Harvester."""
+    """Сообщение после обработки подсистемой Harvester."""
     content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     cleaned_content: str = Field(max_length=4000)
     is_rejected: bool = Field(default=False)
     reject_reason: Optional[str] = Field(default=None)
 
 class ChannelRegistryEntry(BaseModel):
-    """Канал в реестре tg_channels."""
+    """Канал в реестре конфигурации tg_channels."""
     channel_id: str = Field(min_length=1, max_length=100)
     title: str = Field(min_length=1, max_length=200)
     source_type: SourceType = Field(default=SourceType.NEWS)
@@ -90,7 +98,7 @@ class ChannelRegistryEntry(BaseModel):
     last_scan: Optional[datetime] = None
 
 class MiningCycleLog(BaseModel):
-    """Лог цикла сбора."""
+    """Лог цикла сбора данных для листа tg_mining_log."""
     trace_id: str
     started_at: datetime
     finished_at: Optional[datetime] = None
@@ -102,7 +110,10 @@ class MiningCycleLog(BaseModel):
     floodwait_seconds: Optional[int] = None
 
 class GoogleSheetsRow(BaseModel):
-    """Плоская модель для записи в Google Sheets (полная совместимость)."""
+    """
+    Плоская модель для записи в Google Sheets.
+    Полная совместимость со старыми вызовами + расширение до 23 колонок v1.2.
+    """
     signal_id: str = ""
     trace_id: str = ""
     channel_name: str = ""
@@ -121,7 +132,8 @@ class GoogleSheetsRow(BaseModel):
     collected_at: datetime = Field(default_factory=datetime.now)
     is_approved: bool = True
     wf06_used_at: Optional[datetime] = None
-    # Новые поля v1.2
+    
+    # Новые поля контракта v1.2
     classification: Optional[str] = None
     segment_confidence: float = 1.0
     source_type: str = "AGENCY"
@@ -138,7 +150,7 @@ class GoogleSheetsRow(BaseModel):
     cleaned_content: str = ""
 
 class BatchAIResponse(BaseModel):
-    """Ответ GPT на батч сообщений."""
+    """Служебный контейнер для валидации ответов от OpenAI Client."""
     results: List[Any] = Field(default_factory=list)
 
 
@@ -152,7 +164,7 @@ class SourcePassport(BaseModel):
     source_tier: int = Field(default=3, ge=1, le=5)
 
 class ObjectDetails(BaseModel):
-    """Детальные метрики объекта недвижимости."""
+    """Детальные метрики физического объекта недвижимости."""
     price: Optional[int] = Field(default=None)
     address: Optional[str] = Field(default=None)
     rooms: Optional[int] = Field(default=None)
@@ -182,10 +194,13 @@ class ApprovedSignalV2(BaseModel):
 
     @model_validator(mode="after")
     def calculate_sre_metrics(self) -> 'ApprovedSignalV2':
+        # 1. Рассчет приоритета по SRE-формуле
         confidence = self.segment_confidence
         tier = self.source.source_tier
         raw_score = confidence * ((6.0 - tier) / 5.0) * 4.0
         self.priority_score = max(0.0, min(4.0, round(raw_score, 2)))
+        
+        # 2. Интеллектуальное масштабирование цен в рубли
         if self.object_data and self.object_data.price:
             p = self.object_data.price
             if p < 100_000:
@@ -193,5 +208,5 @@ class ApprovedSignalV2(BaseModel):
         return self
 
 
-# Для совместимости: ApprovedSignal = ApprovedSignalV2
+# Глобальный алиас совместимости типов (Закон Системы)
 ApprovedSignal = ApprovedSignalV2
