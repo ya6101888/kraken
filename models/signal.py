@@ -7,6 +7,7 @@ KRAKEN Data Models — ДНК структуры данных.
 """
 
 import os
+import re
 from enum import Enum
 from datetime import datetime
 from typing import List, Optional, Any
@@ -14,16 +15,16 @@ from pydantic import BaseModel, Field, model_validator
 
 
 # ==========================================
-# 1. IMMUTABLE ENUMS (ГЕО, СЕГМЕНТЫ И СТАТУСЫ)
+# 1. IMMUTABLE ENUMS
 # ==========================================
 
 class MarketSegment(str, Enum):
-    PRIMARY = "PRIMARY"      # Новостройки
-    SECONDARY = "SECONDARY"  # Вторичка
-    RENT = "RENT"            # Аренда
-    INVEST = "INVEST"        # Инвестиции
-    PRO = "PRO"              # Проф. аналитика ЮФО
-    NULL = "NULL"            # Не определен
+    PRIMARY = "PRIMARY"
+    SECONDARY = "SECONDARY"
+    RENT = "RENT"
+    INVEST = "INVEST"
+    PRO = "PRO"
+    NULL = "NULL"
 
 class GeoFocus(str, Enum):
     ROSTOV_CITY = "ROSTOV_CITY"
@@ -53,11 +54,33 @@ class ChannelTier(int, Enum):
 
 
 # ==========================================
-# 2. РЕЕСТР КАНАЛОВ (СОВМЕСТИМОСТЬ)
+# 2. СТАРЫЕ МОДЕЛИ (ПОЛНАЯ ОБРАТНАЯ СОВМЕСТИМОСТЬ)
 # ==========================================
 
+class RawTelegramMessage(BaseModel):
+    """Сырое сообщение из Telegram."""
+    message_id: int = Field(ge=1)
+    channel_id: str = Field(min_length=1, max_length=100)
+    channel_name: str = Field(min_length=1, max_length=200)
+    content: str = Field(max_length=10000)
+    date: datetime
+    from_id: int | None = Field(default=None)
+    views: int | None = Field(default=None, ge=0)
+
+class RawMessageWithTrace(RawTelegramMessage):
+    """Сообщение с trace_id."""
+    trace_id: str = Field(pattern=r"^KRAKEN_\d{8}_\d{6}_[a-f0-9]{8}$")
+    collected_at: datetime = Field(default_factory=datetime.now)
+
+class SanitizedMessage(RawMessageWithTrace):
+    """Сообщение после Harvester."""
+    content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
+    cleaned_content: str = Field(max_length=4000)
+    is_rejected: bool = Field(default=False)
+    reject_reason: Optional[str] = Field(default=None)
+
 class ChannelRegistryEntry(BaseModel):
-    """Один канал в реестре tg_channels (Каноничная сборка)."""
+    """Канал в реестре tg_channels."""
     channel_id: str = Field(min_length=1, max_length=100)
     title: str = Field(min_length=1, max_length=200)
     source_type: SourceType = Field(default=SourceType.NEWS)
@@ -66,9 +89,61 @@ class ChannelRegistryEntry(BaseModel):
     status: ChannelStatus = Field(default=ChannelStatus.ACTIVE)
     last_scan: Optional[datetime] = None
 
+class MiningCycleLog(BaseModel):
+    """Лог цикла сбора."""
+    trace_id: str
+    started_at: datetime
+    finished_at: Optional[datetime] = None
+    duration_seconds: Optional[float] = None
+    messages_collected: int = 0
+    messages_after_harvester: int = 0
+    signals_approved: int = 0
+    errors: Optional[List[str]] = None
+    floodwait_seconds: Optional[int] = None
+
+class GoogleSheetsRow(BaseModel):
+    """Плоская модель для записи в Google Sheets (полная совместимость)."""
+    signal_id: str = ""
+    trace_id: str = ""
+    channel_name: str = ""
+    message_id: int = 0
+    content: Optional[str] = None
+    relevance_score: float = 0.0
+    market_segment: Optional[str] = None
+    geo_focus: Optional[str] = None
+    price: Optional[int] = None
+    rooms: Optional[int] = None
+    area: Optional[float] = None
+    floor: Optional[str] = None
+    address: Optional[str] = None
+    developer: Optional[str] = None
+    completion_date: Optional[str] = None
+    collected_at: datetime = Field(default_factory=datetime.now)
+    is_approved: bool = True
+    wf06_used_at: Optional[datetime] = None
+    # Новые поля v1.2
+    classification: Optional[str] = None
+    segment_confidence: float = 1.0
+    source_type: str = "AGENCY"
+    source_tier: int = 3
+    priority_score: float = 0.0
+    object_price: Optional[int] = None
+    object_address: Optional[str] = None
+    object_rooms: Optional[int] = None
+    object_area: Optional[float] = None
+    object_floor: Optional[str] = None
+    object_developer: Optional[str] = None
+    object_completion_date: Optional[str] = None
+    original_content: str = ""
+    cleaned_content: str = ""
+
+class BatchAIResponse(BaseModel):
+    """Ответ GPT на батч сообщений."""
+    results: List[Any] = Field(default_factory=list)
+
 
 # ==========================================
-# 3. ВЛОЖЕННЫЕ СТРУКТУРЫ DTO v1.2
+# 3. НОВЫЕ DTO v1.2 (ВЛОЖЕННЫЕ СТРУКТУРЫ)
 # ==========================================
 
 class SourcePassport(BaseModel):
@@ -77,7 +152,7 @@ class SourcePassport(BaseModel):
     source_tier: int = Field(default=3, ge=1, le=5)
 
 class ObjectDetails(BaseModel):
-    """Детальные метрики физического объекта недвижимости."""
+    """Детальные метрики объекта недвижимости."""
     price: Optional[int] = Field(default=None)
     address: Optional[str] = Field(default=None)
     rooms: Optional[int] = Field(default=None)
@@ -86,12 +161,7 @@ class ObjectDetails(BaseModel):
     developer: Optional[str] = Field(default=None)
     completion_date: Optional[str] = Field(default=None)
 
-
-# ==========================================
-# 4. КОРНЕВОЙ СИГНАЛ (APPROVED SIGNAL v1.2)
-# ==========================================
-
-class ApprovedSignal(BaseModel):
+class ApprovedSignalV2(BaseModel):
     """Каноничный DTO Сигнала SRE 5.0 v1.2 с вложенными паспортами."""
     signal_id: str
     trace_id: str
@@ -107,95 +177,21 @@ class ApprovedSignal(BaseModel):
     relevance_score: float = Field(ge=0.0, le=1.0)
     collected_at: datetime = Field(default_factory=datetime.now)
     is_approved: bool = Field(default=True)
-    wf06_used_at: Optional[datetime] = Field(default_factory=datetime.now)
+    wf06_used_at: Optional[datetime] = None
     priority_score: float = Field(default=0.0)
 
     @model_validator(mode="after")
-    def calculate_sre_metrics(self) -> 'ApprovedSignal':
-        # 1. Вычисление priority_score по SRE-формуле
+    def calculate_sre_metrics(self) -> 'ApprovedSignalV2':
         confidence = self.segment_confidence
         tier = self.source.source_tier
         raw_score = confidence * ((6.0 - tier) / 5.0) * 4.0
         self.priority_score = max(0.0, min(4.0, round(raw_score, 2)))
-
-        # 2. Интеллектуальный скейлер цен в чистые рубли (Защита конвейера)
         if self.object_data and self.object_data.price:
             p = self.object_data.price
-            if p < 100_000:  # Кейс "4300 тр" или "5400" вместо миллионов
+            if p < 100_000:
                 self.object_data.price = p * 1000 if p > 10_000 else p * 1000000
         return self
 
 
-# ==========================================
-# 5. СЛУЖЕБНЫЕ ЛОГИ (МИНЕР, СТРАЖ И СТАРЫЕ СЛОВАРНЫЕ СХЕМЫ)
-# ==========================================
-
-class GoogleSheetsRow(BaseModel):
-    """
-    Плоская модель для обратной совместимости со слоем StorageWriter.
-    Расширена до 23 колонок для предотвращения ValidationError в рантайме v1.2.
-    """
-    signal_id: str = ""
-    trace_id: str = ""
-    channel_name: str = ""
-    message_id: int = 0
-    classification: Optional[str] = None
-    segment_confidence: float = 1.0
-    source_type: str = "AGENCY"
-    source_tier: int = 3
-    geo_focus: Optional[str] = None
-    priority_score: float = 0.0
-    object_price: Optional[int] = None
-    object_address: Optional[str] = None
-    object_rooms: Optional[int] = None
-    object_area: Optional[float] = None
-    object_floor: Optional[str] = None
-    object_developer: Optional[str] = None
-    object_completion_date: Optional[str] = None
-    original_content: str = ""
-    cleaned_content: str = ""
-    relevance_score: float = 0.0
-    collected_at: datetime = Field(default_factory=datetime.now)
-    is_approved: bool = True
-    wf06_used_at: Optional[datetime] = None
-
-    # Поля старого плоского контракта (сохраняем, чтобы не упал старый импорт)
-    content: Optional[str] = None
-    market_segment: Optional[str] = None
-    price: Optional[int] = None
-    rooms: Optional[int] = None
-    area: Optional[float] = None
-    floor: Optional[str] = None
-    address: Optional[str] = None
-    developer: Optional[str] = None
-    completion_date: Optional[str] = None
-
-class SanitizedMessage(BaseModel):
-    """Промежуточный DTO после очистки Harvester."""
-    message_id: int
-    channel_id: int
-    channel_name: str
-    content: str
-    date: datetime
-    from_id: Optional[int] = None
-    views: Optional[int] = None
-    trace_id: str
-    collected_at: datetime = Field(default_factory=datetime.now)
-    content_hash: str
-    cleaned_content: str
-
-class MiningCycleLog(BaseModel):
-    """Лог цикла сбора для листа tg_mining_log."""
-    trace_id: str
-    started_at: datetime
-    finished_at: Optional[datetime] = None
-    duration_seconds: Optional[float] = None
-    messages_collected: int = 0
-    messages_after_harvester: int = 0
-    signals_approved: int = 0
-    errors: Optional[List[str]] = None
-    floodwait_seconds: Optional[int] = None
-
-class BatchAIResponse(BaseModel):
-    """Служебный контейнер для валидации ответов от OpenAI Client."""
-    results: List[Any]
+# Для совместимости: ApprovedSignal = ApprovedSignalV2
+ApprovedSignal = ApprovedSignalV2
