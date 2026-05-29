@@ -3,14 +3,14 @@ KRAKEN OpenAI Client — AI-классификатор сигналов.
 
 Фаза 3: ИНТЕГРАЦИИ
 Модуль: 3.2 openai_client.py
-Версия: v5.2.5 (SRE 5.0 SHIELD REINFORCED)
-Дата/Время стабилизации: 2026-05-29 21:58:00 UTC
+Версия: v5.2.6 (SRE 5.0 SELF-HEALING PARSER)
+Дата/Время стабилизации: 2026-05-29 22:10:00 UTC
 """
 
 import os
 import json
+import re
 import asyncio
-import random
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -59,7 +59,7 @@ class OpenAIClient:
         self.temperature = float(os.getenv("AI_TEMPERATURE", "0.2"))
         self.max_tokens = int(os.getenv("AI_MAX_TOKENS", "2000"))
         self.timeout = int(os.getenv("AI_REQUEST_TIMEOUT_SECONDS", "90"))
-        self.retry_attempts = int(os.getenv("AI_RETRY_ATTEMPTS", "2"))
+        self.retry_attempts = int(os.getenv("AI_RETRY_ATTEMPTS", "3"))
         self.token_budget = TokenBudget()
         self.platinum_prompt = self._load_prompt()
         self._async_client = None
@@ -99,8 +99,22 @@ class OpenAIClient:
                 return prompt_path.read_text(encoding="utf-8")
         raise FileNotFoundError("❌ Critical error: prompts/platinum_prompt.txt not found on disk!")
 
+    def _clean_broken_json(self, raw_str: str) -> str:
+        """Самовосстанавливающийся SRE-ремонт битых кавычек и строк в ответе LLM."""
+        fixed = raw_str.strip()
+        # Вырезаем markdown-обертки, если модель их вернула вопреки json_object режима
+        if fixed.startswith("```json"):
+            fixed = fixed[7:]
+        if fixed.endswith("```"):
+            fixed = fixed[:-3]
+        fixed = fixed.strip()
+        
+        # Заменяем неотэкранированные переносы строк внутри строковых значений
+        fixed = re.sub(r'(?<=[:[,])\s*"\s*\n', '"', fixed)
+        return fixed
+
     async def classify_batch(self, messages: List[str]) -> Optional[Dict]:
-        """Обрабатывает ВСЕ сообщения, деля их на безопасные чанки с защитой от JSONDecodeError."""
+        """Обрабатывает ВСЕ сообщения, деля их на чанки с кастомным SRE-ремонтом JSON."""
         if not self.api_key:
             log_sre("⚠️ OPENAI_API_KEY not set")
             return None
@@ -108,20 +122,20 @@ class OpenAIClient:
         if not messages:
             return {"signals": []}
 
-        # Канон SRE: Бьем большой массив на чанки по 25 сообщений
-        chunk_size = 25
+        # Канон SRE: Бьем на оптимальные чанки по 20 сообщений для снижения риска обрыва строк
+        chunk_size = 20
         chunks = [messages[i:i + chunk_size] for i in range(0, len(messages), chunk_size)]
-        log_sre(f"🧠 ИИ-Файрволл: Запуск тотальной обработки {len(messages)} сообщений (нарезано на {len(chunks)} батчей)")
+        log_sre(f"🧠 ИИ-Файрволл: Запуск тотальной обработки {len(messages)} сообщений (нарезано на {len(chunks)} батчей по {chunk_size} шт)")
         
         combined_signals = []
         client = self.client
 
         for chunk_idx, chunk in enumerate(chunks):
-            # Санитизация: экранируем ломающие JSON-структуру кавычки и переносы
             batch_request = []
             for idx, msg in enumerate(chunk):
-                safe_msg = msg.replace('"', '\\"').replace('\n', ' ').replace('\r', '')
-                batch_request.append({"message_index": idx, "content": safe_msg[:4000]})
+                # Максимально выпрямляем входящий текст: убираем кавычки и переводы строк, ломающие JSON структуры
+                clean_in = msg.replace('"', "'").replace('\n', ' ').replace('\r', ' ').strip()
+                batch_request.append({"message_index": idx, "content": clean_in[:4000]})
                 
             estimated_tokens = sum(len(msg) for msg in chunk) // 4 + 1500
             
@@ -129,17 +143,16 @@ class OpenAIClient:
                 log_sre(f"⚠️ Чанк #{chunk_idx + 1}: Лимит токенов превышен, пропуск.")
                 continue
 
+            data = None
             max_retries = self.retry_attempts
+            
             for attempt in range(max_retries + 1):
                 try:
                     response = await asyncio.wait_for(
                         client.chat.completions.create(
                             model=self.model,
                             messages=[
-                                {
-                                    "role": "system", 
-                                    "content": self.platinum_prompt + "\n\nCRITICAL SYSTEM REQUIREMENT:\nYou must strictly escape all double quotes inside text fields of the output JSON! Ensure the payload is a perfectly valid and complete JSON object without any syntax breaks."
-                                },
+                                {"role": "system", "content": self.platinum_prompt + "\n\nSTRICT JSON RULE: You must return a strict JSON object. Inside text values, NEVER use raw double quotes, use single quotes instead. Do not truncate the response."},
                                 {"role": "user", "content": json.dumps(batch_request, ensure_ascii=False)}
                             ],
                             temperature=self.temperature,
@@ -150,26 +163,26 @@ class OpenAIClient:
                     )
                     
                     self.token_budget.consume(estimated_tokens)
-                    content = response.choices[0].message.content
-                    data = json.loads(content)
+                    raw_content = response.choices[0].message.content
                     
-                    # Собираем сигналы из чанка
-                    if "signals" in data and isinstance(data["signals"], list):
-                        combined_signals.extend(data["signals"])
-                        log_sre(f"✅ Чанк #{chunk_idx + 1} успешно обработан. Извлечено {len(data['signals'])} сигналов.")
+                    # Принудительный ремонт перед парсингом
+                    clean_content = self._clean_broken_json(raw_content)
+                    data = json.loads(clean_content)
                     break
                     
-                except json.JSONDecodeError as jde:
-                    log_sre(f"🔴 Чанк #{chunk_idx + 1} Сбой парсинга JSON (Попытка {attempt + 1}/{max_retries + 1}): {jde}")
+                except (json.JSONDecodeError, Exception) as e:
+                    log_sre(f"🔴 Чанк #{chunk_idx + 1} Сбой рантайма ИИ (Попытка {attempt + 1}/{max_retries + 1}): {type(e).__name__}: {e}")
                     if attempt < max_retries:
-                        await asyncio.sleep((attempt + 1) * 3)
+                        # Экспоненциальное засыпание для стабилизации контекста API
+                        await asyncio.sleep((attempt + 1) * 4)
                     else:
-                        log_sre(f"💀 Чанк #{chunk_idx + 1} окончательно потерян из-за JSONDecodeError.")
-                except Exception as e:
-                    log_sre(f"🔴 OpenAI Сбой на чанке #{chunk_idx + 1} (Попытка {attempt + 1}/{max_retries + 1}): {type(e).__name__}: {e}")
-                    if attempt < max_retries:
-                        await asyncio.sleep((attempt + 1) * 3)
-                    else:
-                        log_sre(f"💀 Чанк #{chunk_idx + 1} окончательно потерян после ретраев.")
+                        log_sre(f"💀 Чанк #{chunk_idx + 1} пробит по лимиту ретраев. Fallback на изоляцию чанка.")
+
+            # Если чанк успешно распарсился — забираем данные
+            if data and "signals" in data and isinstance(data["signals"], list):
+                combined_signals.extend(data["signals"])
+                log_sre(f"✅ Чанк #{chunk_idx + 1} успешно обработан. Накоплено: {len(data['signals'])} сигналов.")
+            else:
+                log_sre(f"⚠️ Чанк #{chunk_idx + 1} пропущен, но конвейер продолжает движение!")
         
         return {"signals": combined_signals}
