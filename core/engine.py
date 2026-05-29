@@ -3,12 +3,13 @@ KRAKEN Engine — Центральный оркестратор сбора си�
 
 Фаза 4: ЯДЕРНЫЕ КОМПОНЕНТЫ
 Модуль: 4.3 engine.py
-Версия: v5.2.4 (SRE 5.0 CORE SYNCHRONIZED)
-Дата/Время стабилизации: 2026-05-29 20:15:00 UTC
+Версия: v5.2.11 (SRE 5.0 CORE SYNCHRONIZED — NO MORE HARDCODE)
+Дата/Время стабилизации: 2026-05-29 22:50:00 UTC
 """
 
 import sys
 import json
+import re
 from pathlib import Path
 from datetime import datetime
 from typing import List, Dict, Optional
@@ -87,7 +88,7 @@ class Engine:
                                 collected_at=datetime.now()
                             )
                             all_messages.append(raw)
-                        except Exception as e:
+                        except Exception:
                             pass
                 
             except Exception as e:
@@ -129,38 +130,53 @@ class Engine:
         sanitized = await self._run_harvester(messages, trace_id)
         stats["messages_after_harvester"] = len(sanitized)
         
-        # 5. Прямой вызов OpenAI Клиента (В обход поломанного ai_firewall.py)
+        # 5. Прямой вызов OpenAI Клиента
         approved = []
         if sanitized:
             try:
                 from clients.openai_client import OpenAIClient
                 ai_client = OpenAIClient()
                 
-                # По закону SRE скармливаем ИИ исключительно строки cleaned_content
                 texts_to_analyze = [msg.cleaned_content for msg in sanitized]
                 ai_response = await ai_client.classify_batch(texts_to_analyze)
                 
                 if ai_response and "signals" in ai_response:
-                    # Маппим сырой JSON от OpenAI обратно в строгие Pydantic модели ApprovedSignal
                     for idx, raw_signal in enumerate(ai_response["signals"]):
                         try:
-                            # Привязываем метаданные исходного сообщения к вердикту ИИ
                             src_msg = sanitized[min(idx, len(sanitized)-1)]
                             
-                            # Сборка вложенной структуры v1.2
+                            # ===== ГВАРДЕЙСКИЙ SRE-ПЕРЕХВАТЧИК ТИПОВ ДАННЫХ ДЛЯ PYDANTIC =====
+                            ai_source = raw_signal.get("source", {})
+                            if not isinstance(ai_source, dict):
+                                ai_source = {}
+                                
+                            # Выпрямляем source_type Enum
+                            st_val = str(ai_source.get("source_type", "AGENCY")).upper()
+                            if st_val not in ['ANALYTIC', 'DEVELOPER', 'NEWS', 'AGENCY', 'PRIVATE']:
+                                st_val = "AGENCY"
+                                
+                            # Выпрямляем source_tier строго в int (вырезаем цифры из 'TIER_1' -> 1)
+                            tier_raw = ai_source.get("source_tier", 3)
+                            if isinstance(tier_raw, str):
+                                digits = re.findall(r'\d+', tier_raw)
+                                tier_val = int(digits[0]) if digits else 3
+                            else:
+                                tier_val = int(tier_raw) if tier_raw else 3
+                            
+                            # Сборка вложенной структуры с динамическими валидными типами
                             signal_obj = ApprovedSignal(
                                 signal_id=f"SIG_{src_msg.channel_id}_{src_msg.message_id}",
                                 trace_id=trace_id,
                                 channel_name=src_msg.channel_name,
                                 message_id=src_msg.message_id,
-                                classification=raw_signal.get("classification", "RESIDENTIAL"),
+                                classification=raw_signal.get("classification", "PRIMARY"),
                                 segment_confidence=float(raw_signal.get("segment_confidence", 0.9)),
                                 source={
-                                    "source_type": "TELEGRAM",
-                                    "source_tier": "TIER_1"
+                                    "source_type": st_val,
+                                    "source_tier": tier_val
                                 },
-                                geo=raw_signal.get("geo", "ROSTOV"),
-                                priority_score=int(raw_signal.get("priority_score", 5)),
+                                geo=raw_signal.get("geo", "ROSTOV_CITY"),
+                                priority_score=int(raw_signal.get("priority_score", 3)),
                                 object_data={
                                     "price": raw_signal.get("object_data", {}).get("price"),
                                     "address": raw_signal.get("object_data", {}).get("address"),
@@ -179,7 +195,7 @@ class Engine:
                             )
                             approved.append(signal_obj)
                         except Exception as inner_e:
-                            sys.stdout.write(f"[{datetime.now().isoformat()}] ⚠️ Сбой маппинга сигнала ApprovedSignal: {inner_e}\n")
+                            sys.stdout.write(f"[{datetime.now().isoformat()}] ⚠️ Сбой мапминга сигнала ApprovedSignal: {inner_e}\n")
                             sys.stdout.flush()
             except Exception as e:
                 sys.stdout.write(f"[{datetime.now().isoformat()}] ❌ Критический сбой слоя ИИ-Файрволла: {e}\n")
