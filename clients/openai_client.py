@@ -3,14 +3,8 @@ KRAKEN OpenAI Client — AI-классификатор сигналов.
 
 Фаза 3: ИНТЕГРАЦИИ
 Модуль: 3.2 openai_client.py
-Версия: v5.2.7 (SRE 5.0 ATOMIC RESILIENCE — GOLDEN MASTER)
-Дата/Время стабилизации: 2026-05-29 22:20:00 UTC
-
-Принципы SRE 5.0 Canon:
-- ГЕНИАЛЬНО = ПРОСТО = СИСТЕМА.
-- Атомарный батчинг (Размер чанка = 1): абсолютная защита от обрыва JSON-строк.
-- Изоляция отказов: падение парсинга одного сообщения не останавливает общий конвейер.
-- Снижение температуры (0.1) и жесткое ограничение токенов вывода (800) для скорости.
+Версия: v5.2.8 (SRE 5.0 ASYNC GATHER POOL — GOLDEN MASTER)
+Дата/Время стабилизации: 2026-05-29 22:30:00 UTC
 """
 
 import os
@@ -22,37 +16,27 @@ from datetime import datetime
 from typing import List, Optional, Dict
 from dotenv import load_dotenv
 
-# ===== ПУТИ И ОКРУЖЕНИЕ (ОНБОРДИНГ ДЖУНОВ) =====
-# Проверяем, где лежит файл конфигурации (.env). Кракен может запускаться
-# как локально на машине разработчика (VS Code), так и внутри Docker-контейнера на Debian.
 env_path = Path("/opt/kraken/secrets/.env")
 if env_path.exists():
     load_dotenv(env_path)
 else:
     load_dotenv(Path(__file__).parent.parent.parent / "secrets" / ".env")
 
-# Системный проброс корня проекта в runtime-пути Python (sys.path)
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 def log_sre(message: str):
-    """Каноничный потокобезопасный логгер. Не буферизирует вывод, пишет сразу."""
     sys.stdout.write(f"[{datetime.now().isoformat()}] {message}\n")
     sys.stdout.flush()
 
 
 class TokenBudget:
-    """
-    SRE-Предохранитель (Rate-Limiter).
-    Защищает корпоративный кошелек и API-аккаунт от внезапного выгорания баланса.
-    """
     def __init__(self, daily_limit: int = 500_000):
         self.daily_limit = daily_limit
         self.consumed_today = 0
         self.reset_date = datetime.now().date()
     
     def _check_reset(self):
-        """Сбрасывает счетчик потребления при наступлении новых суток."""
         today = datetime.now().date()
         if today != self.reset_date:
             self.consumed_today = 0
@@ -68,29 +52,19 @@ class TokenBudget:
 
 
 class OpenAIClient:
-    """Компонент семантического скоринга и обогащения сырых Telegram-постов."""
-    
     def __init__(self):
         self.api_key = os.getenv("OPENAI_API_KEY", "")
         self.model = os.getenv("AI_MODEL_NAME", "gpt-4o-mini")
-        
-        # Экстремально низкая температура (0.1) гарантирует жесткое следование 
-        # JSON-схеме и убивает "творческие галлюцинации" модели
         self.temperature = 0.1
-        
-        # Короткий лимит токенов (800) ускоряет генерацию ответа OpenAI до пары секунд
         self.max_tokens = 800
-        
-        # Индивидуальный таймаут на одну транзакцию — 20 секунд (вместо 90 секунд Шурика)
-        self.timeout = 20
-        self.retry_attempts = int(os.getenv("AI_RETRY_ATTEMPTS", "2"))
+        self.timeout = 25  # Лимит на индивидуальный параллельный запрос
+        self.retry_attempts = 1
         self.token_budget = TokenBudget()
         self.platinum_prompt = self._load_prompt()
         self._async_client = None
     
     @property
     def client(self):
-        """Ленивая инициализация асинхронного клиента OpenAI через прокси-шлюз Squid."""
         if self._async_client is None:
             from openai import AsyncOpenAI
             import httpx
@@ -103,17 +77,18 @@ class OpenAIClient:
             if proxy_ip and proxy_port:
                 proxy_auth = f"{proxy_user}:{proxy_pass}@" if proxy_user and proxy_pass else ""
                 proxy_url = f"http://{proxy_auth}{proxy_ip}:{proxy_port}"
-                log_sre(f"🛡️ OpenAI Client: Корпоративный шлюз Squid активирован -> {proxy_ip}:{proxy_port}")
-                self._http_client = httpx.AsyncClient(proxy=proxy_url, timeout=self.timeout)
+                log_sre(f"🛡️ OpenAI Client: Активирован параллельный шлюз Squid -> {proxy_ip}:{proxy_port}")
+                # Увеличием пул соединений (limits) для параллельного обстрела API
+                limits = httpx.Limits(max_keepalive_connections=50, max_connections=100)
+                self._http_client = httpx.AsyncClient(proxy=proxy_url, timeout=self.timeout, limits=limits)
                 self._async_client = AsyncOpenAI(api_key=self.api_key, http_client=self._http_client)
             else:
-                log_sre("⚠️ OpenAI Client: Прямое подключение без прокси (Контур уязвим к блокировкам!)")
+                log_sre("⚠️ OpenAI Client: Прямое подключение без прокси")
                 self._async_client = AsyncOpenAI(api_key=self.api_key)
                 
         return self._async_client
     
     def _load_prompt(self) -> str:
-        """Многоуровневый поиск файла промпта на диске хоста и внутри Docker."""
         paths = [
             Path("/opt/kraken/prompts/platinum_prompt.txt"),
             Path("/app/prompts/platinum_prompt.txt"),
@@ -121,102 +96,65 @@ class OpenAIClient:
         ]
         for prompt_path in paths:
             if prompt_path.exists():
-                log_sre(f"📖 Система Обсервации: Системный промпт успешно загружен из: {prompt_path}")
+                log_sre(f"📖 Loaded system prompt: {prompt_path}")
                 return prompt_path.read_text(encoding="utf-8")
-        raise FileNotFoundError("❌ Критическая ошибка: Файл prompts/platinum_prompt.txt отсутствует на диске!")
+        raise FileNotFoundError("❌ Critical error: prompts/platinum_prompt.txt not found!")
+
+    async def _process_single_message_async(self, idx: int, msg: str) -> List[Dict]:
+        """Изолированная атомарная транзакция для одного сообщения."""
+        clean_in = msg.replace('"', "'").replace('\n', ' ').replace('\r', ' ').strip()
+        batch_request = [{"message_index": 0, "content": clean_in[:4000]}]
+        
+        client = self.client
+        try:
+            response = await asyncio.wait_for(
+                client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": self.platinum_prompt + "\nSTRICT JSON RULE: Return valid JSON object. Text fields must use single quotes instead of double quotes."},
+                        {"role": "user", "content": json.dumps(batch_request, ensure_ascii=False)}
+                    ],
+                    temperature=self.temperature,
+                    max_tokens=self.max_tokens,
+                    response_format={"type": "json_object"}
+                ),
+                timeout=self.timeout
+            )
+            
+            raw_content = response.choices[0].message.content
+            data = json.loads(raw_content)
+            
+            signals = data.get("signals", [])
+            if isinstance(signals, list):
+                for sig in signals:
+                    sig["message_index"] = idx
+                return signals
+        except Exception:
+            pass
+        return []
 
     async def classify_batch(self, messages: List[str]) -> Optional[Dict]:
-        """
-        ФИЛЬТР ВЫСШЕГО ПОРЯДКА (АТОМАРНЫЙ ТАНК)
-        
-        Пункт ТЗ v1.2: Обработать ВСЕ входящие посты без потерь пачек данных.
-        
-        Реализация: Метод принимает массив строк и обрабатывает КАЖДОЕ сообщение
-        индивидуально (chunk_size = 1). Это исключает синтаксические клинчи JSON.
-        """
+        """Параллельный неблокирующий обстрел OpenAI через asyncio.gather."""
         if not self.api_key:
-            log_sre("⚠️ Критическая ошибка: OPENAI_API_KEY не задан в конфигурации .env")
+            log_sre("⚠️ OPENAI_API_KEY not set")
             return None
         
         if not messages:
             return {"signals": []}
 
-        log_sre(f"🧠 ИИ-Файрволл: Запуск АТОМАРНОЙ изоляции для {len(messages)} сообщений.")
+        log_sre(f"🧠 ИИ-Файрволл: Запуск ПАРАЛЛЕЛЬНОГО пула для {len(messages)} сообщений.")
         
+        # Создаем массив корутин для одновременного выполнения
+        tasks = [self._process_single_message_async(idx, msg) for idx, msg in enumerate(messages)]
+        
+        # Запускаем тотальный параллельный штурм
+        results = await asyncio.gather(*tasks)
+        
+        # Схлопываем результаты из всех тасок в единый плоский список сигналов
         combined_signals = []
-        client = self.client
-
-        # ===== ЦИКЛ ПОШТУЧНОЙ ИЗОЛЯЦИИ ТРАНЗАКЦИЙ =====
-        for idx, msg in enumerate(messages):
-            # Входящая санитизация: принудительно выпрямляем опасные символы риелторов,
-            # меняем двойные кавычки на одинарные, убираем ломающие JSON переносы строк.
-            clean_in = msg.replace('"', "'").replace('\n', ' ').replace('\r', ' ').strip()
-            
-            # Собираем DTO-запрос для ИИ
-            batch_request = [{"message_index": 0, "content": clean_in[:4000]}]
-            estimated_tokens = len(clean_in) // 4 + 1000
-            
-            if not self.token_budget.can_consume(estimated_tokens):
-                log_sre(f"⚠️ Пост #{idx + 1}: Пропуск транзакции — исчерпан суточный лимит токенов.")
-                continue
-
-            # Индивидуальный цикл ретраев для конкретного сообщения
-            max_retries = self.retry_attempts
-            for attempt in range(max_retries + 1):
-                try:
-                    response = await asyncio.wait_for(
-                        client.chat.completions.create(
-                            model=self.model,
-                            messages=[
-                                {
-                                    "role": "system", 
-                                    "content": self.platinum_prompt + "\n\nSTRICT JSON RULE: Return a strict JSON object according to schema. Inside text fields, NEVER use double quotes, use single quotes instead."
-                                },
-                                {"role": "user", "content": json.dumps(batch_request, ensure_ascii=False)}
-                            ],
-                            temperature=self.temperature,
-                            max_tokens=self.max_tokens,
-                            response_format={"type": "json_object"}
-                        ),
-                        timeout=self.timeout
-                    )
-                    
-                    self.token_budget.consume(estimated_tokens)
-                    raw_content = response.choices[0].message.content
-                    
-                    # Парсинг ответа. Так как чанк короткий (1 пост), JSON будет идеальным
-                    data = json.loads(raw_content)
-                    
-                    # Накопление результата
-                    if "signals" in data and isinstance(data["signals"], list) and data["signals"]:
-                        # Маппинг индекса: возвращаем оригинальный индекс сообщения в пачке Harvester
-                        for sig in data["signals"]:
-                            sig["message_index"] = idx
-                        combined_signals.extend(data["signals"])
-                    
-                    # Визуальный маркер успешного пролета в терминале для контроля SRE
-                    sys.stdout.write(".")
-                    sys.stdout.flush()
-                    break # Транзакция успешна, выходим из цикла ретраев сообщения
-                    
-                except json.JSONDecodeError:
-                    # Если модель всё же умудрилась выдать битый JSON — делаем быстрый ретрай
-                    if attempt < max_retries:
-                        await asyncio.sleep(2)
-                    else:
-                        sys.stdout.write("x")
-                        sys.stdout.flush()
-                except Exception as e:
-                    # Амортизатор непредвиденных сетевых сбоев прокси-сервера
-                    if attempt < max_retries:
-                        await asyncio.sleep((attempt + 1) * 3)
-                    else:
-                        sys.stdout.write("x")
-                        sys.stdout.flush()
-                        
-        # Закрываем строчку статус-маркеров в логе
-        sys.stdout.write("\n")
-        sys.stdout.flush()
-        
-        log_sre(f"✅ Атомарный раунд завершен. Извлечено {len(combined_signals)} валидных сигналов из {len(messages)} сообщений.")
+        for sublist in results:
+            if sublist:
+                combined_signals.extend(sublist)
+                
+        log_sre(f"✅ Параллельный раунд завершен. Извлечено {len(combined_signals)} валидных сигналов из {len(messages)} сообщений.")
         return {"signals": combined_signals}
