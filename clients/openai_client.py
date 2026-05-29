@@ -4,17 +4,20 @@ KRAKEN OpenAI Client — AI-классификатор сигналов.
 Фаза 3: ИНТЕГРАЦИИ
 Модуль: 3.2 openai_client.py
 Версия: v5.2.3 (GOLDEN SRE 5.0 Edition v1.2)
+Дата/Время стабилизации: 2026-05-29 18:47:41 UTC
 """
 
 import os
 import json
 import asyncio
+import random
+import sys
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Dict
-import sys
 from dotenv import load_dotenv
 
+# Загрузка .env
 env_path = Path("/opt/kraken/secrets/.env")
 if env_path.exists():
     load_dotenv(env_path)
@@ -22,6 +25,12 @@ else:
     load_dotenv(Path(__file__).parent.parent.parent / "secrets" / ".env")
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
+
+
+def log_sre(message: str):
+    """Потокобезопасное логирование SRE 5.0 с принудительным сбросом буфера Docker."""
+    sys.stdout.write(f"[{datetime.now().isoformat()}] {message}\n")
+    sys.stdout.flush()
 
 
 class TokenBudget:
@@ -82,12 +91,12 @@ class OpenAIClient:
                     proxy_auth = ""
                 
                 proxy_url = f"http://{proxy_auth}{proxy_ip}:{proxy_port}"
-                print(f"🛡️ OpenAI Client: routing through corporate proxy {proxy_ip}:{proxy_port}")
+                log_sre(f"🛡️ OpenAI Client: routing through corporate proxy {proxy_ip}:{proxy_port}")
                 
                 self._http_client = httpx.AsyncClient(proxy=proxy_url, timeout=self.timeout)
                 self._async_client = AsyncOpenAI(api_key=self.api_key, http_client=self._http_client)
             else:
-                print("⚠️ OpenAI Client: running without proxy (direct connection)")
+                log_sre("⚠️ OpenAI Client: running without proxy (direct connection)")
                 self._async_client = AsyncOpenAI(api_key=self.api_key)
                 
         return self._async_client
@@ -100,7 +109,7 @@ class OpenAIClient:
         ]
         for prompt_path in paths:
             if prompt_path.exists():
-                print(f"📖 Loaded system prompt from file: {prompt_path}")
+                log_sre(f"📖 Loaded system prompt from file: {prompt_path}")
                 return prompt_path.read_text(encoding="utf-8")
         raise FileNotFoundError("❌ Critical error: prompts/platinum_prompt.txt not found on disk!")
 
@@ -109,7 +118,7 @@ class OpenAIClient:
     
     async def classify_batch(self, messages: List[str]) -> Optional[Dict]:
         if not self.api_key:
-            print("⚠️ OPENAI_API_KEY not set")
+            log_sre("⚠️ OPENAI_API_KEY not set")
             return None
         
         client = self.client
@@ -117,7 +126,7 @@ class OpenAIClient:
         estimated_tokens = sum(len(msg) for msg in messages) // 4 + 1000
         
         if not self.token_budget.can_consume(estimated_tokens):
-            print(f"⚠️ Token budget exceeded")
+            log_sre("⚠️ Token budget exceeded")
             return None
         
         max_retries = self.retry_attempts
@@ -142,7 +151,16 @@ class OpenAIClient:
                 return json.loads(content)
                 
             except Exception as e:
-                print(f"🔴 OpenAI error (attempt {attempt + 1}/{max_retries + 1}): {e}")
+                err_type = type(e).__name__
+                err_msg = str(e)
+                log_sre(f"🔴 OpenAI Клиент поймал сбой (Попытка {attempt + 1}/{max_retries + 1}):")
+                log_sre(f"   [ТИП ОШИБКИ]: {err_type}")
+                log_sre(f"   [ТЕКСТ ОШИБКИ]: {err_msg}")
+                
                 if attempt < max_retries:
-                    await asyncio.sleep((attempt + 1) * 2)
+                    delay = ((attempt + 1) * 2) + random.uniform(0, 1)
+                    log_sre(f"⏳ Ожидание {delay:.2f}с перед следующим ретраем...")
+                    await asyncio.sleep(delay)
+                else:
+                    log_sre(f"💀 Все {max_retries + 1} попыток запроса к OpenAI исчерпаны. Пропуск батча.")
         return None
