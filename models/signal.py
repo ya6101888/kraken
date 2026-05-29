@@ -1,19 +1,36 @@
-import re
-from datetime import datetime
+"""
+KRAKEN Data Models — ДНК структуры данных.
+
+Фаза 2: МОДЕЛИ ДАННЫХ
+Модуль: 2.1 signal.py
+Версия: v2.1 GOLDEN MASTER (SRE 5.0 Canon)
+"""
+
+import os
 from enum import Enum
-from typing import Optional
-from pydantic import BaseModel, Field, field_validator, model_validator
+from datetime import datetime
+from typing import List, Optional, Any
+from pydantic import BaseModel, Field, model_validator, SettingsConfigDict
+
 
 # ==========================================
-# 1. ENUMS (Бизнес-контур стандарта v1.2)
+# 1. IMMUTABLE ENUMS (ГЕО И СЕГМЕНТЫ)
 # ==========================================
 
 class MarketSegment(str, Enum):
-    PRIMARY = "PRIMARY"
-    SECONDARY = "SECONDARY"
-    RENT = "RENT"
-    INVEST = "INVEST"
-    PRO = "PRO"
+    PRIMARY = "PRIMARY"      # Новостройки
+    SECONDARY = "SECONDARY"  # Вторичка
+    RENT = "RENT"            # Аренда
+    INVEST = "INVEST"        # Инвестиции
+    PRO = "PRO"              # Проф. аналитика ЮФО
+    NULL = "NULL"            # Не определен
+
+class GeoFocus(str, Enum):
+    ROSTOV_CITY = "ROSTOV_CITY"
+    ROSTOV_REGION = "ROSTOV_REGION"
+    SOUTHERN_FEDERAL_DISTRICT = "SOUTHERN_FEDERAL_DISTRICT"
+    FEDERAL = "FEDERAL"
+    NULL = "NULL"
 
 class SourceType(str, Enum):
     ANALYTIC = "ANALYTIC"
@@ -22,107 +39,101 @@ class SourceType(str, Enum):
     AGENCY = "AGENCY"
     PRIVATE = "PRIVATE"
 
-class GeoFocus(str, Enum):
-    ROSTOV_CITY = "ROSTOV_CITY"
-    ROSTOV_REGION = "ROSTOV_REGION"
-    SOUTHERN_FEDERAL_DISTRICT = "SOUTHERN_FEDERAL_DISTRICT"
-    FEDERAL = "FEDERAL"
 
 # ==========================================
-# 2. ВЛОЖЕННЫЕ МОДЕЛИ (Компоненты ДЕТАЛИ)
+# 2. РЕЕСТР КАНАЛОВ (СОВМЕСТИМОСТЬ С КАНАЛ-МЕНЕДЖЕРОМ)
+# ==========================================
+
+class ChannelRegistryEntry(BaseModel):
+    """Один канал в реестре tg_channels (Каноничная сборка)."""
+    channel_id: str = Field(min_length=1, max_length=100)
+    title: str = Field(min_length=1, max_length=200)
+    source_type: SourceType = Field(default=SourceType.NEWS)
+    tier: int = Field(default=3, ge=1, le=5)
+    geo_focus: GeoFocus = Field(default=GeoFocus.ROSTOV_CITY)
+    status: str = Field(default="ACTIVE")
+    last_scan: Optional[datetime] = None
+
+
+# ==========================================
+# 3. ВЛОЖЕННЫЕ СТРУКТУРЫ DTO v1.2
 # ==========================================
 
 class SourcePassport(BaseModel):
-    """Паспорт канала-источника (Проброс метаданных из tg_channels)"""
-    source_type: SourceType
-    source_tier: int = Field(..., ge=1, le=5)
+    """Паспорт источника сигнала."""
+    source_type: SourceType = Field(default=SourceType.AGENCY)
+    source_tier: int = Field(default=3, ge=1, le=5)
 
 class ObjectDetails(BaseModel):
-    """Детальные характеристики объекта недвижимости"""
-    price: Optional[int] = None
-    address: Optional[str] = Field(None, max_length=500)
-    rooms: Optional[int] = Field(None, ge=1, le=10)
-    area: Optional[float] = Field(None, ge=1.0, le=1000.0)
-    floor: Optional[str] = None
-    developer: Optional[str] = Field(None, max_length=200)
-    completion_date: Optional[str] = Field(None, pattern=r"^\d{4}-\d{2}$")
+    """Детальные метрики физического объекта недвижимости."""
+    price: Optional[int] = Field(default=None)
+    address: Optional[str] = Field(default=None)
+    rooms: Optional[int] = Field(default=None)
+    area: Optional[float] = Field(default=None)
+    floor: Optional[str] = Field(default=None)
+    developer: Optional[str] = Field(default=None)
+    completion_date: Optional[str] = Field(default=None)
 
-    @field_validator("price", mode="before")
-    @classmethod
-    def scale_price_to_rubles(cls, v):
-        """
-        Хирургический валидатор: перехватывает кривой JSON от ИИ
-        и масштабирует рубли (например: 4300 -> 4300000, '9.5 млн' -> 9500000)
-        """
-        if v is None:
-            return None
-            
-        if isinstance(v, str):
-            # Зачищаем строку от мусора
-            v_clean = v.replace(",", ".").lower().strip()
-            nums = re.findall(r"[-+]?\d*\.\d+|\d+", v_clean)
-            if not nums:
-                return None
-            val = float(nums[0])
-            
-            if "млн" in v_clean:
-                return int(val * 1_000_000)
-            if "тр" in v_clean or val < 100000:
-                return int(val * 1000)
-            return int(val)
-            
-        # Защита от деления/обрезания на стороне ИИ (если прилетело 4300 интом)
-        if isinstance(v, (int, float)) and v < 100000:
-            return int(v * 1000)
-            
-        return int(v)
 
 # ==========================================
-# 3. КОРНЕВОЙ СУВЕРЕННЫЙ DTO СТАНДАРТА SRE 5.0
+# 4. КОРНЕВОЙ СИГНАЛ (APPROVED SIGNAL v1.2)
 # ==========================================
 
 class ApprovedSignal(BaseModel):
-    """Монолитный контракт данных Кракена v1.2 (Запись таблицы)"""
-    signal_id: str = Field(..., pattern=r"^SIG_[a-f0-9]{8}_\d+$")
-    trace_id: str = Field(..., pattern=r"^KRAKEN_.*")
+    """Каноничный DTO Сигнала SRE 5.0 v1.2 с вложенными паспортами."""
+    signal_id: str
+    trace_id: str
     channel_name: str
-    message_id: int = Field(..., ge=1)
-    
-    # Вложенные узлы DTO v1.2
-    classification: MarketSegment
-    segment_confidence: float = Field(..., ge=0.0, le=1.0)
-    source: SourcePassport
-    geo: GeoFocus
-    priority_score: float = Field(0.0, ge=0.0, le=4.0)
-    object_data: ObjectDetails
-    
-    # Текстовые хранилища и семантика
+    message_id: int
+    classification: MarketSegment = Field(default=MarketSegment.PRIMARY)
+    segment_confidence: float = Field(default=1.0, ge=0.0, le=1.0)
+    source: SourcePassport = Field(default_factory=SourcePassport)
+    geo: GeoFocus = Field(default=GeoFocus.ROSTOV_CITY)
+    object_data: ObjectDetails = Field(default_factory=ObjectDetails)
     original_content: str
     cleaned_content: str
-    relevance_score: float = Field(..., ge=0.70)
-    collected_at: datetime
-    is_approved: bool = True
-    wf06_used_at: Optional[datetime] = None
+    relevance_score: float = Field(ge=0.0, le=1.0)
+    collected_at: datetime = Field(default_factory=datetime.now)
+    is_approved: bool = Field(default=True)
+    wf06_used_at: Optional[datetime] = Field(default_factory=datetime.now)
+    priority_score: float = Field(default=0.0)
 
     @model_validator(mode="after")
-    def calculate_priority_score(self) -> "ApprovedSignal":
-        """
-        Автоматический математический расчёт индекса приоритета.
-        Учитывает уверенность ИИ и Tier источника (Tier 1 весит больше, чем Tier 5).
-        """
-        # Вес тира: Tier 1 = 1.0, Tier 5 = 0.2
-        tier_weight = (6 - self.source.source_tier) / 5.0
-        base_score = self.segment_confidence * tier_weight * 4.0
-        self.priority_score = round(max(0.0, min(4.0, base_score)), 2)
+    def calculate_sre_metrics(self) -> 'ApprovedSignal':
+        # 1. Вычисление priority_score по SRE-формуле
+        confidence = self.segment_confidence
+        tier = self.source.source_tier
+        raw_score = confidence * ((6.0 - tier) / 5.0) * 4.0
+        self.priority_score = max(0.0, min(4.0, round(raw_score, 2)))
+
+        # 2. Интеллектуальный скейлер цен в чистые рубли (Защита конвейера)
+        if self.object_data and self.object_data.price:
+            p = self.object_data.price
+            if p < 100_000:  # Кейс "4300 тр" или "5400" вместо миллионов
+                self.object_data.price = p * 1000 if p > 10_000 else p * 1000000
         return self
 
 
 # ==========================================
-# 4. ТЕХНИЧЕСКИЕ МОДЕЛИ ДЛЯ ЛОГОВ (Для совместимости)
+# 5. СЛУЖЕБНЫЕ ЛОГИ (МИНЕР И СИСТЕМА)
 # ==========================================
 
+class SanitizedMessage(BaseModel):
+    """Промежуточный DTO после очистки Harvester."""
+    message_id: int
+    channel_id: int
+    channel_name: str
+    content: str
+    date: datetime
+    from_id: Optional[int] = None
+    views: Optional[int] = None
+    trace_id: str
+    collected_at: datetime = Field(default_factory=datetime.now)
+    content_hash: str
+    cleaned_content: str
+
 class MiningCycleLog(BaseModel):
-    """Модель лога для листа tg_mining_log"""
+    """Лог цикла сбора для листа tg_mining_log."""
     trace_id: str
     started_at: datetime
     finished_at: Optional[datetime] = None
@@ -130,5 +141,9 @@ class MiningCycleLog(BaseModel):
     messages_collected: int = 0
     messages_after_harvester: int = 0
     signals_approved: int = 0
-    errors: Optional[list] = None
+    errors: Optional[List[str]] = None
     floodwait_seconds: Optional[int] = None
+
+class BatchAIResponse(BaseModel):
+    """Служебный контейнер для валидации ответов от OpenAI Client."""
+    results: List[Any]
