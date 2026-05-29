@@ -10,7 +10,7 @@ import os
 from enum import Enum
 from datetime import datetime
 from typing import List, Optional, Any
-from pydantic import BaseModel, Field, model_validator, SettingsConfigDict
+from pydantic import BaseModel, Field, model_validator
 
 
 # ==========================================
