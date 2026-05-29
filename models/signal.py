@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, model_validator
 
 
 # ==========================================
-# 1. IMMUTABLE ENUMS (ГЕО И СЕГМЕНТЫ)
+# 1. IMMUTABLE ENUMS (ГЕО, СЕГМЕНТЫ И СТАТУСЫ КАНАЛОВ)
 # ==========================================
 
 class MarketSegment(str, Enum):
@@ -39,6 +39,18 @@ class SourceType(str, Enum):
     AGENCY = "AGENCY"
     PRIVATE = "PRIVATE"
 
+class ChannelStatus(str, Enum):
+    ACTIVE = "ACTIVE"
+    TESTING = "TESTING"
+    BANNED = "BANNED"
+
+class ChannelTier(int, Enum):
+    TIER_1 = 1
+    TIER_2 = 2
+    TIER_3 = 3
+    TIER_4 = 4
+    TIER_5 = 5
+
 
 # ==========================================
 # 2. РЕЕСТР КАНАЛОВ (СОВМЕСТИМОСТЬ С КАНАЛ-МЕНЕДЖЕРОМ)
@@ -51,7 +63,7 @@ class ChannelRegistryEntry(BaseModel):
     source_type: SourceType = Field(default=SourceType.NEWS)
     tier: int = Field(default=3, ge=1, le=5)
     geo_focus: GeoFocus = Field(default=GeoFocus.ROSTOV_CITY)
-    status: str = Field(default="ACTIVE")
+    status: ChannelStatus = Field(default=ChannelStatus.ACTIVE)
     last_scan: Optional[datetime] = None
 
 
