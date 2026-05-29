@@ -3,13 +3,13 @@ KRAKEN Google Sheets Client — Запись сигналов в таблицы.
 
 Фаза 3: ИНТЕГРАЦИИ
 Модуль: 3.3 gsheets_client.py
-Версия: v5.2.3
+Версия: v5.2.3 (GOLDEN SRE 5.0 Edition)
 
 Принципы:
 - Авторизация через service_account.json
-- Batch-запись до 100 строк за раз
+- Динамический размер буфера из core.config.settings (GSHEETS_BUFFER_SIZE)
 - Retry: 3 попытки с exponential backoff
-- Буфер: до 100 записей в памяти при недоступности
+- Перемапливание вложенного DTO v1.2 в плоский вид 23 колонок
 - DLQ: сохранение неудавшихся записей в JSON
 - Health-check: тестовая запись при старте
 """
@@ -24,7 +24,7 @@ from typing import List, Optional, Dict
 from dotenv import load_dotenv
 
 # Загрузка .env
-env_path = Path("/app/secrets/.env")
+env_path = Path("/opt/kraken/secrets/.env")
 if env_path.exists():
     load_dotenv(env_path)
 else:
@@ -33,7 +33,7 @@ else:
 # Импорт моделей
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from models.signal import GoogleSheetsRow, MiningCycleLog, ApprovedSignal
+from models.signal import MiningCycleLog, ApprovedSignal
 
 
 class GoogleSheetsClient:
@@ -55,7 +55,7 @@ class GoogleSheetsClient:
         
         # Корректировка пути для запуска вне Docker
         if self.service_account_path.startswith("/app/") and not Path("/app").exists():
-            self.service_account_path = "/app" + self.service_account_path[4:]
+            self.service_account_path = "/opt/kraken" + self.service_account_path[4:]
         
         self.client = None
         self._init_client()
@@ -118,15 +118,10 @@ class GoogleSheetsClient:
     
     # ===== 3.3.3. BATCH ЗАПИСЬ СИГНАЛОВ =====
     
-    def write_signals(self, signals: List[GoogleSheetsRow]) -> bool:
+    def write_signals(self, signals: List) -> bool:
         """
         Записывает список сигналов в лист tg_signals_approved.
-        
-        Args:
-            signals: Список GoogleSheetsRow для записи.
-        
-        Returns:
-            True если запись успешна.
+        Безопасно принимает как плоские списки, так и сырые объекты.
         """
         if not self.is_available or not signals:
             return False
@@ -135,31 +130,36 @@ class GoogleSheetsClient:
             sheet = self.client.open_by_key(self.spreadsheet_id)
             worksheet = sheet.worksheet("tg_signals_approved")
             
-            rows = []
-            for signal in signals:
-                row = [
-                    signal.signal_id,
-                    signal.trace_id,
-                    signal.channel_name,
-                    signal.message_id,
-                    signal.content or "",
-                    signal.relevance_score,
-                    signal.market_segment or "",
-                    signal.geo_focus or "",
-                    signal.price or "",
-                    signal.rooms or "",
-                    signal.area or "",
-                    signal.floor or "",
-                    signal.address or "",
-                    signal.developer or "",
-                    signal.completion_date or "",
-                    signal.collected_at.isoformat() if signal.collected_at else "",
-                    signal.wf06_used_at.isoformat() if signal.wf06_used_at else ""
-                ]
-                rows.append(row)
+            # Если данные уже развернуты в плоский массив внутри BufferedWriter — пишем как есть
+            if signals and isinstance(signals[0], list):
+                rows = signals
+            else:
+                # Резервный фоллбэк для обратной совместимости старого кода
+                rows = []
+                for signal in signals:
+                    row = [
+                        getattr(signal, 'signal_id', ''),
+                        getattr(signal, 'trace_id', ''),
+                        getattr(signal, 'channel_name', ''),
+                        getattr(signal, 'message_id', 0),
+                        getattr(signal, 'content', ''),
+                        getattr(signal, 'relevance_score', 0.0),
+                        getattr(signal, 'market_segment', ''),
+                        getattr(signal, 'geo_focus', ''),
+                        getattr(signal, 'price', ''),
+                        getattr(signal, 'rooms', ''),
+                        getattr(signal, 'area', ''),
+                        getattr(signal, 'floor', ''),
+                        getattr(signal, 'address', ''),
+                        getattr(signal, 'developer', ''),
+                        getattr(signal, 'completion_date', ''),
+                        getattr(signal, 'collected_at', datetime.now()).isoformat() if hasattr(signal, 'collected_at') else '',
+                        getattr(signal, 'wf06_used_at', datetime.now()).isoformat() if hasattr(signal, 'wf06_used_at') and signal.wf06_used_at else ''
+                    ]
+                    rows.append(row)
             
             worksheet.append_rows(rows, value_input_option="USER_ENTERED")
-            print(f"📊 Written {len(signals)} signals to Google Sheets")
+            print(f"📊 Written {len(rows)} signals to Google Sheets")
             return True
             
         except Exception as e:
@@ -203,10 +203,9 @@ class GoogleSheetsClient:
     
     # ===== 3.3.5. RETRY С EXPONENTIAL BACKOFF =====
     
-    async def write_with_retry(self, signals: List[GoogleSheetsRow]) -> bool:
+    async def write_with_retry(self, signals: List) -> bool:
         """
         Пытается записать сигналы с повторными попытками.
-        
         Retry: 3 попытки с exponential backoff: 1с, 2с, 4с + jitter.
         """
         if not signals:
@@ -219,7 +218,7 @@ class GoogleSheetsClient:
                 result = self.write_signals(signals)
                 if result:
                     return True
-            except Exception as e:
+            except Exception:
                 pass
             
             if attempt < max_retries - 1:
@@ -233,9 +232,7 @@ class GoogleSheetsClient:
     # ===== 3.3.8. HEALTH CHECK =====
     
     def health_check(self) -> bool:
-        """
-        Проверяет доступность Google Sheets тестовой записью.
-        """
+        """Проверяет доступность Google Sheets тестовой записью."""
         if not self.is_available:
             return False
         
@@ -261,44 +258,78 @@ class GoogleSheetsClient:
 
 class BufferedWriter:
     """
-    Буфер для накопления сигналов перед записью.
+    Буфер для накопления сигналов перед записью стандарта SRE 5.0 v1.2.
     
-    - Хранит до 100 записей в памяти
+    - Динамический размер max_size из core.config.settings
     - При заполнении — flush в Google Sheets
-    - При ошибке — сохраняет в DLQ (failed_writes.json)
+    - При ошибке — сохранение в DLQ
     """
     
-    def __init__(self, max_size: int = 100):
-        self.buffer: List[GoogleSheetsRow] = []
-        self.max_size = max_size
+    def __init__(self, max_size: Optional[int] = None):
+        # Хирургический проброс: если размер не передан, берем из Pydantic settings
+        from core.config import settings
+        self.max_size = max_size or getattr(settings, "GSHEETS_BUFFER_SIZE", 100)
+        
+        self.buffer: List[ApprovedSignal] = []  # ОЗУ-буфер под новую модель данных
         self.dlq_path = Path(os.getenv(
             "GSHEETS_DLQ_PATH",
-            "/app/dlq/failed_writes.json"
+            "/opt/kraken/dlq/failed_writes.json"
         ))
         
-        # Корректировка пути
+        # Корректировка пути для изоляции томов Debian
         if str(self.dlq_path).startswith("/app/") and not Path("/app").exists():
-            self.dlq_path = Path("/app") / self.dlq_path.relative_to("/app")
+            self.dlq_path = Path("/opt/kraken") / self.dlq_path.relative_to("/app")
+            
+        print(f"📦 BufferedWriter initialized with max_size={self.max_size}")
     
-    async def add(self, signal: GoogleSheetsRow, writer: GoogleSheetsClient):
-        """
-        Добавляет сигнал в буфер. Если буфер полон — flush.
-        """
+    async def add(self, signal: ApprovedSignal, writer: GoogleSheetsClient):
+        """Добавляет сигнал в буфер. Если буфер полон — flush."""
         self.buffer.append(signal)
-        
         if len(self.buffer) >= self.max_size:
             await self.flush(writer)
     
     async def flush(self, writer: GoogleSheetsClient):
-        """
-        Отправляет накопленные сигналы в Google Sheets.
-        При ошибке — сохраняет в DLQ.
-        """
+        """Отправляет накопленные сигналы в Google Sheets в плоском виде 23 колонок."""
         if not self.buffer:
             return
         
         print(f"📤 Flushing {len(self.buffer)} signals...")
-        success = await writer.write_with_retry(self.buffer)
+        
+        # Перемапливаем наши вложенные структуры ApprovedSignal в плоские строки по чертежу твоего сна
+        flat_rows = []
+        for signal in self.buffer:
+            # Предотвращаем падение, если часть полей v1.2 временно отсутствует в рантайме
+            s_type = signal.source.source_type.value if hasattr(signal.source, 'source_type') and hasattr(signal.source.source_type, 'value') else str(getattr(signal, 'source_type', ''))
+            s_tier = signal.source.source_tier if hasattr(signal.source, 'source_tier') else int(getattr(signal, 'source_tier', 3))
+            
+            row = [
+                signal.signal_id,
+                signal.trace_id,
+                signal.channel_name,
+                signal.message_id,
+                signal.classification.value if hasattr(signal.classification, 'value') else str(signal.classification),
+                signal.segment_confidence,
+                s_type,
+                s_tier,
+                signal.geo.value if hasattr(signal.geo, 'value') else str(signal.geo),
+                signal.priority_score,
+                signal.object_data.price if hasattr(signal, 'object_data') else getattr(signal, 'price', None),
+                signal.object_data.address if hasattr(signal, 'object_data') else getattr(signal, 'address', None),
+                signal.object_data.rooms if hasattr(signal, 'object_data') else getattr(signal, 'rooms', None),
+                signal.object_data.area if hasattr(signal, 'object_data') else getattr(signal, 'area', None),
+                signal.object_data.floor if hasattr(signal, 'object_data') else getattr(signal, 'floor', None),
+                signal.object_data.developer if hasattr(signal, 'object_data') else getattr(signal, 'developer', None),
+                signal.object_data.completion_date if hasattr(signal, 'object_data') else getattr(signal, 'completion_date', None),
+                signal.original_content,
+                signal.cleaned_content,
+                signal.relevance_score,
+                signal.collected_at.isoformat() if hasattr(signal.collected_at, 'isoformat') else str(signal.collected_at),
+                signal.is_approved,
+                signal.wf06_used_at.isoformat() if hasattr(signal, 'wf06_used_at') and signal.wf06_used_at else ""
+            ]
+            flat_rows.append(row)
+            
+        success = await writer.write_with_retry(flat_rows)
         
         if success:
             self.buffer.clear()
@@ -306,11 +337,9 @@ class BufferedWriter:
         else:
             await self._save_to_dlq()
             self.buffer.clear()
-    
+            
     async def _save_to_dlq(self):
-        """
-        Сохраняет неудавшиеся записи в Dead Letter Queue.
-        """
+        """Сохраняет неудавшиеся записи в Dead Letter Queue."""
         entries = []
         if self.dlq_path.exists():
             try:
@@ -323,16 +352,16 @@ class BufferedWriter:
                 "timestamp": datetime.now().isoformat(),
                 "signal_id": signal.signal_id,
                 "trace_id": signal.trace_id,
-                "channel_name": signal.channel_name,
-                "content": signal.content[:200] if signal.content else "",
+                "classification": signal.classification.value if hasattr(signal.classification, 'value') else str(signal.classification),
+                "priority_score": signal.priority_score,
                 "error": "Google Sheets write failed after retries"
             })
         
         self.dlq_path.parent.mkdir(parents=True, exist_ok=True)
         self.dlq_path.write_text(json.dumps(entries, indent=2, ensure_ascii=False))
         print(f"💀 {len(self.buffer)} signals saved to DLQ: {self.dlq_path}")
-    
+        
     async def shutdown(self, writer: GoogleSheetsClient):
-        """Принудительный flush при остановке."""
+        """Принудительный flush при остановке контейнера."""
         print(f"🛑 Shutdown: flushing {len(self.buffer)} buffered signals")
         await self.flush(writer)
