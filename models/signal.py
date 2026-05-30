@@ -3,8 +3,8 @@ KRAKEN Data Models — ДНК структуры данных.
 
 Фаза 2: МОДЕЛИ ДАННЫХ
 Модуль: 2.1 signal.py
-Версия: v2.2.0 (SRE 5.0 CANONICAL — МАТРИЦА v1.2 — ПОЛНЫЙ СИНХРОН)
-Дата стабилизации: 2026-05-30 16:30:00 UTC
+Версия: v2.2.5 (SRE 5.0 CANONICAL — МАТРИЦА v2.1 — STUDIO VALIDATION FIXED)
+Дата стабилизации: 2026-05-30 18:42:00 UTC
 """
 
 import re
@@ -111,11 +111,11 @@ class MiningCycleLog(BaseModel):
 
 
 # ==========================================
-# 3. КАНОНИЧЕСКИЙ ПЛОСКИЙ СИГНАЛ v1.2 (25 СТОЛБЦОВ ТЗ)
+# 3. КАНОНИЧЕСКИЙ ПЛОСКИЙ СИГНАЛ v2.1 (25 СТОЛБЦОВ ТЗ)
 # ==========================================
 
 class ApprovedSignal(BaseModel):
-    """Канонический плоский DTO Сигнала SRE 5.0 под спецификацию матрицы v1.2."""
+    """Канонический плоский DTO Сигнала SRE 5.0 под спецификацию матрицы v2.1."""
     signal_id: str = Field(pattern=r"^SIG_[A-Za-z0-9_–\-]+_\d+$")
     trace_id: str = Field(pattern=r"^KRAKEN_.*")
     channel_id: str = Field(min_length=1, max_length=100)
@@ -131,7 +131,7 @@ class ApprovedSignal(BaseModel):
     # Плоская бизнес-матрица — Защита от дробных цен ИИ через float тип на входе
     price: Optional[float] = Field(default=None, ge=0)
     address: Optional[str] = Field(default=None, max_length=500)
-    rooms: Optional[int] = Field(default=None, ge=1, le=10)
+    rooms: Optional[int] = Field(default=None, ge=0, le=10) # ge=0 разрешает студии!
     area: Optional[float] = Field(default=None, ge=1.0, le=1000.0)
     floor: Optional[str] = Field(default=None, max_length=50)
     developer: Optional[str] = Field(default=None, max_length=200)
@@ -159,7 +159,7 @@ class ApprovedSignal(BaseModel):
                 self.price = self.price * 1000 if self.price > 10_000 else self.price * 1_000_000
             self.price = int(round(self.price))
 
-        # 3. Расчет priority_score по канонической SRE-формуле ТЗ v1.2
+        # 3. Расчет priority_score по канонической SRE-формуле ТЗ v2.1
         source_bonus = (5 - self.source_tier) * 0.4
         
         geo_bonuses = {
@@ -189,9 +189,8 @@ class GoogleSheetsRow(ApprovedSignal):
 
 
 class BatchAIResponse(BaseModel):
-    """Служебный контейнер для валидации пакетных ответов OpenAI API под Матрицу v1.2."""
+    """Служебный контейнер для валидации пакетных ответов OpenAI API под Матрицу v2.1."""
     signals: List[Any] = Field(default_factory=list)
 
 
-# Обратный легаси-алиас совместимости для сохранения внешних вызовов ядра
 ApprovedSignalV2 = ApprovedSignal

@@ -3,8 +3,8 @@ KRAKEN Engine — Центральный оркестратор сбора си�
 
 Фаза 4: ЯДЕРНЫЕ КОМПОНЕНТЫ
 Модуль: 4.3 engine.py
-Версия: v5.3.0 (SRE 5.0 CORE SYNCHRONIZED — FLAT MASTER v1.2)
-Дата/Время стабилизации: 2026-05-30 15:35:00 UTC
+Версия: v5.3.5 (SRE 5.0 CORE SYNCHRONIZED — HYBRID FLAT MASTER v2.1)
+Дата/Время стабилизации: 2026-05-30 18:40:00 UTC
 """
 
 import sys
@@ -126,13 +126,14 @@ class Engine:
             stats["errors"].append(f"Fetch error: {e}")
             messages = []        
                 
+            
         stats["messages_collected"] = len(messages)
         
         # 4. Harvester
         sanitized = await self._run_harvester(messages, trace_id)
         stats["messages_after_harvester"] = len(sanitized)
         
-        # 5. Прямой вызов OpenAI Клиента (Плоская матрица v1.2)
+        # 5. Прямой вызов OpenAI Клиента (Абсолютная плоская матрица v2.1)
         approved = []
         if sanitized:
             try:
@@ -164,15 +165,16 @@ class Engine:
                             if geo_val not in GeoFocus.__members__:
                                 geo_val = "ROSTOV_CITY"
                                 
-                            # Слой спам-отсечки ИИ-файрволла v1.2
+                            # Слой спам-отсечки ИИ-файрволла v2.1
                             if not raw_signal.get("is_approved", True):
                                 continue
                                 
-                            obj_data = raw_signal.get("object", {})
+                            # Каноническое SRE 5.0 выпрямление контракта: гибридный забор из корня или легаси-мешка object
+                            obj_data = raw_signal.get("object")
                             if not isinstance(obj_data, dict):
-                                obj_data = {}
+                                obj_data = raw_signal
                             
-                            # Сборка канонического плоского DTO v1.2 Golden Master
+                            # Сборка канонического плоского DTO v2.1 Golden Master
                             signal_obj = ApprovedSignal(
                                 signal_id=f"SIG_{src_msg.channel_id.replace('@', '')}_{src_msg.message_id}",
                                 trace_id=trace_id,
@@ -185,15 +187,15 @@ class Engine:
                                 source_tier=tier_val,
                                 geo_focus=GeoFocus(geo_val),
                                 
-                                # Прямой маппинг плоских бизнес-параметров без префиксов object_
-                                price=obj_data.get("price"),
-                                address=obj_data.get("address"),
-                                rooms=obj_data.get("rooms"),
-                                area=obj_data.get("area"),
-                                floor=str(obj_data.get("floor")) if obj_data.get("floor") is not None else None,
-                                developer=obj_data.get("developer"),
-                                completion_date=obj_data.get("completion_date"),
-                                phone_number=obj_data.get("phone_number"),
+                                # Прямой маппинг бизнес-параметров (с приоритетом корня над вложенным object)
+                                price=obj_data.get("price") if obj_data.get("price") is not None else raw_signal.get("price"),
+                                address=obj_data.get("address") if obj_data.get("address") is not None else raw_signal.get("address"),
+                                rooms=obj_data.get("rooms") if obj_data.get("rooms") is not None else raw_signal.get("rooms"),
+                                area=obj_data.get("area") if obj_data.get("area") is not None else raw_signal.get("area"),
+                                floor=str(obj_data.get("floor")) if obj_data.get("floor") is not None else (str(raw_signal.get("floor")) if raw_signal.get("floor") is not None else None),
+                                developer=obj_data.get("developer") if obj_data.get("developer") is not None else raw_signal.get("developer"),
+                                completion_date=obj_data.get("completion_date") if obj_data.get("completion_date") is not None else raw_signal.get("completion_date"),
+                                phone_number=obj_data.get("phone_number") if obj_data.get("phone_number") is not None else raw_signal.get("phone_number"),
                                 
                                 original_content=src_msg.content,
                                 cleaned_content=src_msg.cleaned_content,
@@ -204,10 +206,10 @@ class Engine:
                             )
                             approved.append(signal_obj)
                         except Exception as inner_e:
-                            sys.stdout.write(f"[{datetime.now().isoformat()}] ⚠️ Сбой маппинга ядра v1.2: {inner_e}\n")
+                            sys.stdout.write(f"[{datetime.now().isoformat()}] ⚠️ Сбой маппинга ядра v2.1: {inner_e} | RAW JSON: {raw_signal}\n")
                             sys.stdout.flush()
             except Exception as e:
-                sys.stdout.write(f"[{datetime.now().isoformat()}] ❌ Критический сбой слоя ИИ-Файрволла v1.2: {e}\n")
+                sys.stdout.write(f"[{datetime.now().isoformat()}] ❌ Критический сбой слоя ИИ-Файрволла v2.1: {e}\n")
                 sys.stdout.flush()
                 stats["errors"].append(f"AI error: {e}")
 
