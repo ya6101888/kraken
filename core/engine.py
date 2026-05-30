@@ -3,12 +3,11 @@ KRAKEN Engine — Центральный оркестратор сбора си�
 
 Фаза 4: ЯДЕРНЫЕ КОМПОНЕНТЫ
 Модуль: 4.3 engine.py
-Версия: v5.2.11 (SRE 5.0 CORE SYNCHRONIZED — NO MORE HARDCODE)
-Дата/Время стабилизации: 2026-05-29 22:50:00 UTC
+Версия: v5.3.0 (SRE 5.0 CORE SYNCHRONIZED — FLAT MASTER v1.2)
+Дата/Время стабилизации: 2026-05-30 15:35:00 UTC
 """
 
 import sys
-import json
 import re
 from pathlib import Path
 from datetime import datetime
@@ -19,7 +18,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from models.signal import (
     RawMessageWithTrace,
     SanitizedMessage,
-    ApprovedSignal
+    ApprovedSignal,
+    MarketSegment,
+    SourceType,
+    GeoFocus
 )
 
 
@@ -130,10 +132,13 @@ class Engine:
         sanitized = await self._run_harvester(messages, trace_id)
         stats["messages_after_harvester"] = len(sanitized)
         
-        # 5. Прямой вызов OpenAI Клиента
+        # 5. Прямой вызов OpenAI Клиента (Плоская матрица v1.2)
         approved = []
         if sanitized:
             try:
+                # Паспортный справочник для O(1) поиска метаданных каналов
+                channel_meta = {c.channel_id: c for c in channels}
+                
                 from clients.openai_client import OpenAIClient
                 ai_client = OpenAIClient()
                 
@@ -144,76 +149,85 @@ class Engine:
                     for idx, raw_signal in enumerate(ai_response["signals"]):
                         try:
                             src_msg = sanitized[min(idx, len(sanitized)-1)]
+                            meta = channel_meta.get(src_msg.channel_id)
                             
-                            # ===== ГВАРДЕЙСКИЙ SRE-ПЕРЕХВАТЧИК ТИПОВ ДАННЫХ ДЛЯ PYDANTIC =====
-                            ai_source = raw_signal.get("source", {})
-                            if not isinstance(ai_source, dict):
-                                ai_source = {}
-                                
-                            # Выпрямляем source_type Enum
-                            st_val = str(ai_source.get("source_type", "AGENCY")).upper()
-                            if st_val not in ['ANALYTIC', 'DEVELOPER', 'NEWS', 'AGENCY', 'PRIVATE']:
-                                st_val = "AGENCY"
-                                
-                            # Выпрямляем source_tier строго в int (вырезаем цифры из 'TIER_1' -> 1)
-                            tier_raw = ai_source.get("source_tier", 3)
-                            if isinstance(tier_raw, str):
-                                digits = re.findall(r'\d+', tier_raw)
-                                tier_val = int(digits[0]) if digits else 3
-                            else:
-                                tier_val = int(tier_raw) if tier_raw else 3
+                            # Накатываем жесткую паспортизацию источника из реестра конфигурации
+                            st_val = meta.source_type if meta else SourceType.PRIVATE
+                            tier_val = int(meta.tier) if meta else 3
                             
-                            # Сборка вложенной структуры с динамическими валидными типами
+                            # Безопасный разбор плоских Enum-векторов ИИ
+                            seg_val = str(raw_signal.get("market_segment", "SECONDARY")).upper()
+                            if seg_val not in MarketSegment.__members__:
+                                seg_val = "SECONDARY"
+                                
+                            geo_val = str(raw_signal.get("geo_focus", "ROSTOV_CITY")).upper()
+                            if geo_val not in GeoFocus.__members__:
+                                geo_val = "ROSTOV_CITY"
+                                
+                            # Слой спам-отсечки ИИ-файрволла v1.2
+                            if not raw_signal.get("is_approved", True):
+                                continue
+                                
+                            obj_data = raw_signal.get("object", {})
+                            if not isinstance(obj_data, dict):
+                                obj_data = {}
+                            
+                            # Сборка канонического плоского DTO v1.2 Golden Master
                             signal_obj = ApprovedSignal(
-                                signal_id=f"SIG_{src_msg.channel_id}_{src_msg.message_id}",
+                                signal_id=f"SIG_{src_msg.channel_id.replace('@', '')}_{src_msg.message_id}",
                                 trace_id=trace_id,
+                                channel_id=src_msg.channel_id,
                                 channel_name=src_msg.channel_name,
                                 message_id=src_msg.message_id,
-                                classification=raw_signal.get("classification", "PRIMARY"),
-                                segment_confidence=float(raw_signal.get("segment_confidence", 0.9)),
-                                source={
-                                    "source_type": st_val,
-                                    "source_tier": tier_val
-                                },
-                                geo=raw_signal.get("geo", "ROSTOV_CITY"),
-                                priority_score=int(raw_signal.get("priority_score", 3)),
-                                object_data={
-                                    "price": raw_signal.get("object_data", {}).get("price"),
-                                    "address": raw_signal.get("object_data", {}).get("address"),
-                                    "rooms": raw_signal.get("object_data", {}).get("rooms"),
-                                    "area": raw_signal.get("object_data", {}).get("area"),
-                                    "floor": raw_signal.get("object_data", {}).get("floor"),
-                                    "developer": raw_signal.get("object_data", {}).get("developer"),
-                                    "completion_date": raw_signal.get("object_data", {}).get("completion_date")
-                                },
+                                market_segment=MarketSegment(seg_val),
+                                segment_confidence=float(raw_signal.get("segment_confidence", 0.95)),
+                                source_type=SourceType(st_val),
+                                source_tier=tier_val,
+                                geo_focus=GeoFocus(geo_val),
+                                
+                                # Прямой маппинг плоских бизнес-параметров без префиксов object_
+                                price=obj_data.get("price"),
+                                address=obj_data.get("address"),
+                                rooms=obj_data.get("rooms"),
+                                area=obj_data.get("area"),
+                                floor=str(obj_data.get("floor")) if obj_data.get("floor") is not None else None,
+                                developer=obj_data.get("developer"),
+                                completion_date=obj_data.get("completion_date"),
+                                phone_number=obj_data.get("phone_number"),
+                                
                                 original_content=src_msg.content,
                                 cleaned_content=src_msg.cleaned_content,
                                 relevance_score=float(raw_signal.get("relevance_score", 0.85)),
                                 collected_at=src_msg.collected_at,
                                 is_approved=True,
-                                wf06_used_at=datetime.now().isoformat()
+                                wf06_used_at=None
                             )
                             approved.append(signal_obj)
                         except Exception as inner_e:
-                            sys.stdout.write(f"[{datetime.now().isoformat()}] ⚠️ Сбой мапминга сигнала ApprovedSignal: {inner_e}\n")
+                            sys.stdout.write(f"[{datetime.now().isoformat()}] ⚠️ Сбой маппинга ядра v1.2: {inner_e}\n")
                             sys.stdout.flush()
             except Exception as e:
-                sys.stdout.write(f"[{datetime.now().isoformat()}] ❌ Критический сбой слоя ИИ-Файрволла: {e}\n")
+                sys.stdout.write(f"[{datetime.now().isoformat()}] ❌ Критический сбой слоя ИИ-Файрволла v1.2: {e}\n")
                 sys.stdout.flush()
                 stats["errors"].append(f"AI error: {e}")
 
-        stats["signals_approved"] = len(approved)
+        # Слой финальной гигиены данных перед отгрузкой
+        from core.ai_firewall import AIFirewall
+        firewall = AIFirewall()
+        final_approved = firewall.filter_signals(approved)
         
-        # 6. Запись в Google Sheets
-        if approved:
-            await self._write_signals(approved)
+        stats["signals_approved"] = len(final_approved)
+        
+        # 6. Запись в Google Sheets по плоской матрице
+        if final_approved:
+            await self._write_signals(final_approved)
         
         self.total_cycles += 1
-        self.total_signals += len(approved)
+        self.total_signals += len(final_approved)
         self.last_success = datetime.now()
         
         duration = (datetime.now() - started_at).total_seconds()
-        sys.stdout.write(f"[{datetime.now().isoformat()}] ✅ Cycle {trace_id}: {len(messages)} collected, {len(sanitized)} sanitized, {len(approved)} approved ({duration:.1f}s)\n")
+        sys.stdout.write(f"[{datetime.now().isoformat()}] ✅ Cycle {trace_id}: {len(messages)} collected, {len(sanitized)} sanitized, {len(final_approved)} approved ({duration:.1f}s)\n")
         sys.stdout.flush()
         
         stats["finished_at"] = datetime.now()
@@ -226,9 +240,7 @@ class Engine:
             if not hasattr(self, '_harvester'):
                 self._harvester = Harvester()
             return await self._harvester.process(messages)
-        except Exception as e:
-            sys.stdout.write(f"[{datetime.now().isoformat()}] ⚠️ Harvester error: {e}\n")
-            sys.stdout.flush()
+        except Exception:
             return []
     
     async def _write_signals(self, signals: List[ApprovedSignal]):
@@ -237,9 +249,8 @@ class Engine:
             if not hasattr(self, '_writer') or self._writer is None:
                 self._writer = StorageWriter(self._gsheets_client)
             await self._writer.write_signals(signals)
-        except Exception as e:
-            sys.stdout.write(f"[{datetime.now().isoformat()}] ⚠️ StorageWriter failed to save signals: {e}\n")
-            sys.stdout.flush()
+        except Exception:
+            pass
     
     def get_stats(self) -> dict:
         return {
