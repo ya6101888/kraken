@@ -3,13 +3,13 @@ KRAKEN Storage Writer — Запись сигналов в Google Sheets.
 
 Фаза 4: ЯДЕРНЫЕ КОМПОНЕНТЫ
 Модуль: 4.6 storage_writer.py
-Версия: v5.2.12 (SRE 5.0 CORE SYNCHRONIZED — BUFFER COMPATIBLE)
-Дата/Время стабилизации: 2026-05-29 23:10:00 UTC
+Версия: v5.3.1 (КАНАНИЧЕСКИЙ ПЛОСКИЙ ВЫПРЯМИТЕЛЬ — МАТРИЦА v1.2)
+Дата/Время стабилизации: 2026-05-30 16:10:00 UTC
 """
 
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List
 from datetime import datetime
 
 # Настройка путей рантайма
@@ -20,7 +20,7 @@ from models.signal import ApprovedSignal, GoogleSheetsRow
 
 class StorageWriter:
     """
-    Записывает одобренные сигналы в Google Sheets.
+    Записывает одобренные сигналы в Google Sheets по плоскому контракту ТЗ v1.2.
     
     Использование:
         writer = StorageWriter(gsheets_client)
@@ -35,7 +35,7 @@ class StorageWriter:
     
     @property
     def gsheets(self):
-        """Ленивая инициализация GoogleSheetsClient."""
+        """Ленивая初始化 GoogleSheetsClient."""
         if self._gsheets_client is None:
             from clients.gsheets_client import GoogleSheetsClient
             self._gsheets_client = GoogleSheetsClient()
@@ -43,77 +43,28 @@ class StorageWriter:
     
     @property
     def buffer(self):
-        """Ленивая инициализация накопительного буфера."""
+        """Ленивая инициализация накопительного буфера с ограничением max_size=10."""
         if self._buffer is None:
             from clients.gsheets_client import BufferedWriter
-            # Архитектурный лимит: 10 записей для баланса real-time и лимитов API
             self._buffer = BufferedWriter(max_size=10) 
         return self._buffer
     
-    # ===== 4.6.6. КАНОНИЧЕСКАЯ КОНВЕРТАЦИЯ (ВЫПРЯМЛЕНИЕ DTO v1.2) =====
-    
     @staticmethod
     def convert(signal: ApprovedSignal) -> GoogleSheetsRow:
-        """
-        Преобразует сложный вложенный ApprovedSignal v1.2 в плоский GoogleSheetsRow
-        для корректной вставки в 23 колонки таблицы Google Sheets.
-        """
-        # Сборка плоского объекта строки
-        row = GoogleSheetsRow(
-            signal_id=signal.signal_id,
-            trace_id=signal.trace_id,
-            channel_name=signal.channel_name,
-            message_id=signal.message_id,
-            classification=signal.classification.value if hasattr(signal.classification, 'value') else str(signal.classification),
-            segment_confidence=signal.segment_confidence,
-            source_type=signal.source.source_type.value if hasattr(signal.source.source_type, 'value') else str(signal.source.source_type),
-            source_tier=signal.source.source_tier,
-            geo_focus=signal.geo.value if hasattr(signal.geo, 'value') else str(signal.geo),
-            priority_score=signal.priority_score,
-            object_price=signal.object_data.price,
-            object_address=signal.object_data.address,
-            object_rooms=signal.object_data.rooms,
-            object_area=signal.object_data.area,
-            object_floor=signal.object_data.floor,
-            object_developer=signal.object_data.developer,
-            object_completion_date=signal.object_data.completion_date,
-            original_content=signal.original_content,
-            cleaned_content=signal.cleaned_content,
-            relevance_score=signal.relevance_score,
-            collected_at=signal.collected_at,
-            is_approved=signal.is_approved,
-            wf06_used_at=signal.wf06_used_at,
-            
-            # Поля совместимости со старыми плоскими схемами
-            content=signal.cleaned_content,
-            market_segment=signal.classification.value if hasattr(signal.classification, 'value') else str(signal.classification),
-            price=signal.object_data.price,
-            rooms=signal.object_data.rooms,
-            area=signal.object_data.area,
-            floor=signal.object_data.floor,
-            address=signal.object_data.address,
-            developer=signal.object_data.developer,
-            completion_date=signal.object_data.completion_date
-        )
+        """Каноническая конвертация: сопряжение типов через валидацию v2.1 Golden Master."""
+        return GoogleSheetsRow(**signal.model_dump())
         
-        # ===== SRE ЗАЩИТНЫЙ ЭКРАН: ПРОБРОС ДИНАМИЧЕСКИХ СВОЙСТВ ДЛЯ БУФЕРА ШУРИКА =====
-        # Если BufferedWriter внутри вызывает row.source или row.geo — мы отдаем оригиналы
-        object.__setattr__(row, 'source', signal.source)
-        object.__setattr__(row, 'geo', signal.geo)
-        
-        return row
-
     @staticmethod
     def from_approved_signal(signal: ApprovedSignal) -> GoogleSheetsRow:
-        """Алиас совместимости: пробрасывает вызов старого метода Шурика на каноничный convert."""
+        """Алиас совместимости для сохранения внешних вызовов ядра."""
         return StorageWriter.convert(signal)
     
-    # ===== 4.6.3. ЗАПИСЬ С БУФЕРОМ =====
+    # ===== 4.6.3. ЗАПИСЬ В ТАБЛИЦУ СТРОГО ПО МАТРИЦЕ ТЗ (25 КОЛОНОК) =====
     
     async def write_signals(self, signals: List[ApprovedSignal]) -> bool:
         """
-        Записывает сигналы в Google Sheets через буфер.
-        Когда буфер заполняется (10 записей) — автоматический flush.
+        Парсит сигналы в плоские массивы ячеек и отправляет в буфер.
+        Строгое позиционирование от столбца A до Y (25 колонок).
         """
         if not signals:
             return True
@@ -121,13 +72,44 @@ class StorageWriter:
         try:
             for signal in signals:
                 row = self.from_approved_signal(signal)
-                await self.buffer.add(row, self.gsheets)
+                
+                # Сборка плоского списка под физические столбцы таблицы (Закон Матрицы v1.2 — 25 колонок)
+                cells_array = [
+                    row.signal_id,
+                    row.trace_id,
+                    row.channel_id,
+                    row.channel_name,
+                    row.message_id,
+                    row.market_segment.value if hasattr(row.market_segment, 'value') else str(row.market_segment),
+                    row.segment_confidence,
+                    row.source_type.value if hasattr(row.source_type, 'value') else str(row.source_type),
+                    row.source_tier,
+                    row.geo_focus.value if hasattr(row.geo_focus, 'value') else str(row.geo_focus),
+                    row.priority_score,
+                    row.price,
+                    row.address,
+                    row.rooms,
+                    row.area,
+                    row.floor,
+                    row.developer,
+                    row.completion_date,
+                    row.phone_number,
+                    row.original_content,
+                    row.cleaned_content,
+                    row.relevance_score,
+                    row.collected_at.isoformat() if isinstance(row.collected_at, datetime) else str(row.collected_at),
+                    "TRUE",  # is_approved всегда TRUE на этом листе
+                    row.wf06_used_at.isoformat() if isinstance(row.wf06_used_at, datetime) else (str(row.wf06_used_at) if row.wf06_used_at else "")
+                ]
+                
+                # Передаем готовый плоский массив строк в BufferedWriter
+                await self.buffer.add(cells_array, self.gsheets)
             
             self.total_written += len(signals)
             return True
             
         except Exception as e:
-            sys.stdout.write(f"[{datetime.now().isoformat()}] ❌ StorageWriter runtime error: {e}\n")
+            sys.stdout.write(f"[{datetime.now().isoformat()}] ❌ StorageWriter v1.2 runtime error: {e}\n")
             sys.stdout.flush()
             self.total_failed += len(signals)
             return False

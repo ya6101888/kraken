@@ -3,13 +3,13 @@ KRAKEN Google Sheets Client — Запись сигналов в таблицы.
 
 Фаза 3: ИНТЕГРАЦИИ
 Модуль: 3.3 gsheets_client.py
-Версия: v5.2.3 (GOLDEN SRE 5.0 Edition v1.2)
+Версия: v5.3.1 (GOLDEN SRE 5.0 Edition v1.2 — 25 COLUMNS FIXED)
 
 Принципы:
 - Авторизация через service_account.json
 - Динамический размер буфера из core.config.settings (GSHEETS_BUFFER_SIZE)
 - Retry: 3 попытки с exponential backoff
-- Перемапливание вложенного DTO v1.2 в плоский вид 23 колонок
+- Прямой транзит канонического DTO v1.2 (25 колонок) без повторного маппинга
 - DLQ: сохранение неудавшихся записей в JSON
 - Health-check: тестовая запись при старте
 """
@@ -33,17 +33,12 @@ else:
 # Импорт моделей
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from models.signal import MiningCycleLog, ApprovedSignal
+from models.signal import MiningCycleLog
 
 
 class GoogleSheetsClient:
     """
     Клиент для работы с Google Sheets API.
-    
-    Использование:
-        gs = GoogleSheetsClient()
-        channels = gs.load_channels()
-        gs.write_signals(signals)
     """
     
     def __init__(self):
@@ -94,9 +89,7 @@ class GoogleSheetsClient:
     # ===== 3.3.2. ЗАГРУЗКА КАНАЛОВ =====
     
     def load_channels(self) -> List[Dict]:
-        """
-        Загружает реестр каналов из листа tg_channels.
-        """
+        """Загружает реестр каналов из листа tg_channels."""
         if not self.is_available:
             return []
         
@@ -113,59 +106,22 @@ class GoogleSheetsClient:
             print(f"❌ Failed to load channels: {e}")
             return []
     
-    # ===== 3.3.3. BATCH ЗАПИСЬ СИГНАЛОВ =====
+    # ===== 3.3.3. BATCH ЗАПИСЬ СИГНАЛОВ (СТРОГО 25 КОЛОНОК) =====
     
-    def write_signals(self, signals: List) -> bool:
+    def write_signals(self, rows: List[List]) -> bool:
         """
-        Записывает список сигналов в лист tg_signals_approved.
-        Безопасно принимает как плоские списки, так и сырые объекты.
+        Записывает подготовленные плоские списки строк в лист tg_signals_approved.
+        Транзит "выпрямленных" данных напрямую без повторной сборки.
         """
-        if not self.is_available or not signals:
+        if not self.is_available or not rows:
             return False
         
         try:
             sheet = self.client.open_by_key(self.spreadsheet_id)
             worksheet = sheet.worksheet("tg_signals_approved")
             
-            # Если данные уже развернуты в плоский массив внутри BufferedWriter — пишем как есть
-            if signals and isinstance(signals[0], list):
-                rows = signals
-            else:
-                # Резервный фоллбэк v1.2 для сквозной безопасности рантайма
-                rows = []
-                for signal in signals:
-                    s_type = signal.source.source_type.value if hasattr(signal.source, 'source_type') and hasattr(signal.source.source_type, 'value') else str(getattr(signal, 'source_type', ''))
-                    s_tier = signal.source.source_tier if hasattr(signal.source, 'source_tier') else int(getattr(signal, 'source_tier', 3))
-                    
-                    row = [
-                        getattr(signal, 'signal_id', ''),
-                        getattr(signal, 'trace_id', ''),
-                        getattr(signal, 'channel_name', ''),
-                        getattr(signal, 'message_id', 0),
-                        signal.classification.value if hasattr(signal.classification, 'value') else str(getattr(signal, 'classification', '')),
-                        getattr(signal, 'segment_confidence', 1.0),
-                        s_type,
-                        s_tier,
-                        signal.geo.value if hasattr(signal.geo, 'value') else str(getattr(signal, 'geo_focus', '')),
-                        getattr(signal, 'priority_score', 0.0),
-                        signal.object_data.price if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'price', None),
-                        signal.object_data.address if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'address', None),
-                        signal.object_data.rooms if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'rooms', None),
-                        signal.object_data.area if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'area', None),
-                        signal.object_data.floor if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'floor', None),
-                        signal.object_data.developer if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'developer', None),
-                        signal.object_data.completion_date if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'completion_date', None),
-                        getattr(signal, 'original_content', getattr(signal, 'content', '')),
-                        getattr(signal, 'cleaned_content', ''),
-                        getattr(signal, 'relevance_score', 0.0),
-                        signal.collected_at.isoformat() if hasattr(signal, 'collected_at') and hasattr(signal.collected_at, 'isoformat') else str(datetime.now().isoformat()),
-                        getattr(signal, 'is_approved', True),
-                        signal.wf06_used_at.isoformat() if hasattr(signal, 'wf06_used_at') and signal.wf06_used_at and hasattr(signal.wf06_used_at, 'isoformat') else ""
-                    ]
-                    rows.append(row)
-            
             worksheet.append_rows(rows, value_input_option="USER_ENTERED")
-            print(f"📊 Written {len(rows)} signals to Google Sheets (23 columns configuration)")
+            print(f"📊 Written {len(rows)} signals to Google Sheets (25 columns configuration)")
             return True
             
         except Exception as e:
@@ -206,16 +162,16 @@ class GoogleSheetsClient:
     
     # ===== 3.3.5. RETRY С EXPONENTIAL BACKOFF =====
     
-    async def write_with_retry(self, signals: List) -> bool:
+    async def write_with_retry(self, rows: List[List]) -> bool:
         """Retry: 3 попытки с exponential backoff: 1с, 2с, 4с + jitter."""
-        if not signals:
+        if not rows:
             return True
         
         max_retries = int(os.getenv("GSHEETS_RETRY_ATTEMPTS", "3"))
         
         for attempt in range(max_retries):
             try:
-                result = self.write_signals(signals)
+                result = self.write_signals(rows)
                 if result:
                     return True
             except Exception:
@@ -258,14 +214,15 @@ class GoogleSheetsClient:
 
 class BufferedWriter:
     """
-    Буфер для накопления сигналов перед записью стандарта SRE 5.0 v1.2.
+    Буфер для накопления плоских сигналов перед пакетной записью.
+    Принимает уже готовые сформированные списки ячеек (Матрица ТЗ v1.2).
     """
     
     def __init__(self, max_size: Optional[int] = None):
         from core.config import settings
         self.max_size = max_size or getattr(settings, "GSHEETS_BUFFER_SIZE", 100)
         
-        self.buffer: List[ApprovedSignal] = []  # ОЗУ-буфер под новую модель данных
+        self.buffer: List[List] = []  # ОЗУ-буфер плоских списков
         self.dlq_path = Path(os.getenv(
             "GSHEETS_DLQ_PATH",
             "/opt/kraken/dlq/failed_writes.json"
@@ -276,51 +233,20 @@ class BufferedWriter:
             
         print(f"📦 BufferedWriter initialized with max_size={self.max_size}")
     
-    async def add(self, signal: ApprovedSignal, writer: GoogleSheetsClient):
-        self.buffer.append(signal)
+    async def add(self, flat_row: List, writer: GoogleSheetsClient):
+        """Добавляет готовую выпрямленную строку в буфер."""
+        self.buffer.append(flat_row)
         if len(self.buffer) >= self.max_size:
             await self.flush(writer)
     
     async def flush(self, writer: GoogleSheetsClient):
-        """Отправляет накопленные сигналы в Google Sheets в плоском виде 23 колонок."""
+        """Отправляет накопленные плоские строки напрямую в Google Sheets."""
         if not self.buffer:
             return
         
         print(f"📤 Flushing {len(self.buffer)} signals...")
         
-        flat_rows = []
-        for signal in self.buffer:
-            s_type = signal.source.source_type.value if hasattr(signal.source, 'source_type') and hasattr(signal.source.source_type, 'value') else str(getattr(signal, 'source_type', ''))
-            s_tier = signal.source.source_tier if hasattr(signal.source, 'source_tier') else int(getattr(signal, 'source_tier', 3))
-            
-            row = [
-                signal.signal_id,
-                signal.trace_id,
-                signal.channel_name,
-                signal.message_id,
-                signal.classification.value if hasattr(signal.classification, 'value') else str(signal.classification),
-                signal.segment_confidence,
-                s_type,
-                s_tier,
-                signal.geo.value if hasattr(signal.geo, 'value') else str(signal.geo),
-                signal.priority_score,
-                signal.object_data.price if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'price', None),
-                signal.object_data.address if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'address', None),
-                signal.object_data.rooms if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'rooms', None),
-                signal.object_data.area if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'area', None),
-                signal.object_data.floor if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'floor', None),
-                signal.object_data.developer if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'developer', None),
-                signal.object_data.completion_date if hasattr(signal, 'object_data') and signal.object_data else getattr(signal, 'completion_date', None),
-                signal.original_content,
-                signal.cleaned_content,
-                signal.relevance_score,
-                signal.collected_at.isoformat() if hasattr(signal.collected_at, 'isoformat') else str(signal.collected_at),
-                signal.is_approved,
-                signal.wf06_used_at.isoformat() if hasattr(signal, 'wf06_used_at') and signal.wf06_used_at and hasattr(signal.wf06_used_at, 'isoformat') else ""
-            ]
-            flat_rows.append(row)
-            
-        success = await writer.write_with_retry(flat_rows)
+        success = await writer.write_with_retry(self.buffer)
         
         if success:
             self.buffer.clear()
@@ -337,13 +263,14 @@ class BufferedWriter:
             except json.JSONDecodeError:
                 pass
         
-        for signal in self.buffer:
+        for flat_row in self.buffer:
+            # Извлекаем метаданные по жестким индексам матрицы для логирования в DLQ
             entries.append({
                 "timestamp": datetime.now().isoformat(),
-                "signal_id": signal.signal_id,
-                "trace_id": signal.trace_id,
-                "classification": signal.classification.value if hasattr(signal.classification, 'value') else str(signal.classification),
-                "priority_score": signal.priority_score,
+                "signal_id": flat_row[0] if len(flat_row) > 0 else "UNKNOWN",
+                "trace_id": flat_row[1] if len(flat_row) > 1 else "UNKNOWN",
+                "classification": flat_row[5] if len(flat_row) > 5 else "UNKNOWN",
+                "priority_score": flat_row[10] if len(flat_row) > 10 else 0.0,
                 "error": "Google Sheets write failed after retries"
             })
         
