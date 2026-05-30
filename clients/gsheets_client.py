@@ -3,21 +3,24 @@ KRAKEN Google Sheets Client — Запись сигналов в таблицы.
 
 Фаза 3: ИНТЕГРАЦИИ
 Модуль: 3.3 gsheets_client.py
-Версия: v5.3.1 (GOLDEN SRE 5.0 Edition v1.2 — 25 COLUMNS FIXED)
+Версия: v5.3.2 (GOLDEN SRE 5.0 Edition v2.1 — 25 COLUMNS FIXED)
+Дата изменения: 2026-05-30 17:02:00
 
 Принципы:
 - Авторизация через service_account.json
 - Динамический размер буфера из core.config.settings (GSHEETS_BUFFER_SIZE)
 - Retry: 3 попытки с exponential backoff
-- Прямой транзит канонического DTO v1.2 (25 колонок) без повторного маппинга
+- Прямой транзит канонического DTO v2.1 (25 колонок) без повторного маппинга
 - DLQ: сохранение неудавшихся записей в JSON
 - Health-check: тестовая запись при старте
+- Тотальная наблюдаемость: вывод критических SRE-логов напрямую в stdout хоста
 """
 
 import os
 import json
 import asyncio
 import random
+import sys
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Dict
@@ -31,7 +34,6 @@ else:
     load_dotenv(Path(__file__).parent.parent.parent / "secrets" / ".env")
 
 # Импорт моделей
-import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from models.signal import MiningCycleLog
 
@@ -215,7 +217,7 @@ class GoogleSheetsClient:
 class BufferedWriter:
     """
     Буфер для накопления плоских сигналов перед пакетной записью.
-    Принимает уже готовые сформированные списки ячеек (Матрица ТЗ v1.2).
+    Принимает уже готовые сформированные списки ячеек (Матрица ТЗ v2.1).
     """
     
     def __init__(self, max_size: Optional[int] = None):
@@ -244,13 +246,16 @@ class BufferedWriter:
         if not self.buffer:
             return
         
-        print(f"📤 Flushing {len(self.buffer)} signals...")
+        # Тотальная наблюдаемость транзита данных в stdout хоста
+        sys.stdout.write(f"📤 [SRE BUFFER] Педаль нажата! Выталкиваем {len(self.buffer)} сигналов строго по Матрице v2.1...\n")
+        sys.stdout.flush()
         
         success = await writer.write_with_retry(self.buffer)
         
         if success:
             self.buffer.clear()
-            print("✅ Flush successful")
+            sys.stdout.write("✅ [SRE BUFFER] Пакет успешно доставлен в Google Sheets (25 columns configuration)!\n")
+            sys.stdout.flush()
         else:
             await self._save_to_dlq()
             self.buffer.clear()
@@ -276,8 +281,10 @@ class BufferedWriter:
         
         self.dlq_path.parent.mkdir(parents=True, exist_ok=True)
         self.dlq_path.write_text(json.dumps(entries, indent=2, ensure_ascii=False))
-        print(f"💀 {len(self.buffer)} signals saved to DLQ: {self.dlq_path}")
+        sys.stdout.write(f"💀 [SRE DLQ] {len(self.buffer)} сигналов аварийно сохранены в DLQ: {self.dlq_path}\n")
+        sys.stdout.flush()
         
     async def shutdown(self, writer: GoogleSheetsClient):
-        print(f"🛑 Shutdown: flushing {len(self.buffer)} buffered signals")
+        sys.stdout.write(f"🛑 [SRE SHUTDOWN] Перехват сигнала: принудительный слив {len(self.buffer)} buffered сигналов...\n")
+        sys.stdout.flush()
         await self.flush(writer)
