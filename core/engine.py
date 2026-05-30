@@ -3,8 +3,8 @@ KRAKEN Engine — Центральный оркестратор сбора си�
 
 Фаза 4: ЯДЕРНЫЕ КОМПОНЕНТЫ
 Модуль: 4.3 engine.py
-Версия: v5.3.7 (SRE 5.0 CORE SYNCHRONIZED — ABSOLUTE DIRECT FLAT MASTER — ENGINE AUTO-FLUSH)
-Дата/Время стабилизации: 2026-05-30 19:30:00 UTC
+Версия: v5.3.8 (SRE 5.0 CORE SYNCHRONIZED — RAW observado — AUTOMATIC FLUSH)
+Дата/Время стабилизации: 2026-05-30 20:30:00 UTC
 """
 
 import sys
@@ -126,7 +126,6 @@ class Engine:
             stats["errors"].append(f"Fetch error: {e}")
             messages = []        
                 
-            
         stats["messages_collected"] = len(messages)
         
         # 4. Harvester
@@ -137,7 +136,6 @@ class Engine:
         approved = []
         if sanitized:
             try:
-                # Паспортный справочник для O(1) поиска метаданных каналов
                 channel_meta = {c.channel_id: c for c in channels}
                 
                 from clients.openai_client import OpenAIClient
@@ -146,17 +144,19 @@ class Engine:
                 texts_to_analyze = [msg.cleaned_content for msg in sanitized]
                 ai_response = await ai_client.classify_batch(texts_to_analyze)
                 
+                # ТОТАЛЬНЫЙ КВАНТОСКОПИЧЕСКИЙ ЛОГ — ВЫБИВАЕМ ПРОБКУ КЭША ДОКЕРА
+                sys.stdout.write(f"🔮 [RAW AI RESPONSE] Получен пакет: {ai_response}\n")
+                sys.stdout.flush()
+                
                 if ai_response and "signals" in ai_response:
                     for idx, raw_signal in enumerate(ai_response["signals"]):
                         try:
                             src_msg = sanitized[min(idx, len(sanitized)-1)]
                             meta = channel_meta.get(src_msg.channel_id)
                             
-                            # Накатываем жесткую паспортизацию источника из реестра конфигурации
                             st_val = meta.source_type if meta else SourceType.PRIVATE
                             tier_val = int(meta.tier) if meta else 3
                             
-                            # Безопасный разбор плоских Enum-векторов ИИ
                             seg_val = str(raw_signal.get("market_segment", "SECONDARY")).upper()
                             if seg_val not in MarketSegment.__members__:
                                 seg_val = "SECONDARY"
@@ -165,16 +165,13 @@ class Engine:
                             if geo_val not in GeoFocus.__members__:
                                 geo_val = "ROSTOV_CITY"
                                 
-                            # Слой спам-отсечки ИИ-файрволла v2.1
                             if not raw_signal.get("is_approved", True):
                                 continue
                                 
-                            # Каноническое SRE 5.0 выпрямление контракта: гибридный забор из корня или легаси-мешка object
                             obj_data = raw_signal.get("object")
                             if not isinstance(obj_data, dict):
                                 obj_data = raw_signal
                             
-                            # Сборка канонического плоского DTO v2.1 Golden Master
                             signal_obj = ApprovedSignal(
                                 signal_id=f"SIG_{src_msg.channel_id.replace('@', '')}_{src_msg.message_id}",
                                 trace_id=trace_id,
@@ -187,7 +184,6 @@ class Engine:
                                 source_tier=tier_val,
                                 geo_focus=GeoFocus(geo_val),
                                 
-                                # Прямой маппинг бизнес-параметров (с приоритетом корня над вложенным object)
                                 price=obj_data.get("price") if obj_data.get("price") is not None else raw_signal.get("price"),
                                 address=obj_data.get("address") if obj_data.get("address") is not None else raw_signal.get("address"),
                                 rooms=obj_data.get("rooms") if obj_data.get("rooms") is not None else raw_signal.get("rooms"),
@@ -206,14 +202,14 @@ class Engine:
                             )
                             approved.append(signal_obj)
                         except Exception as inner_e:
-                            sys.stdout.write(f"[{datetime.now().isoformat()}] ⚠️ Сбой маппинга ядра v2.1: {inner_e} | RAW JSON: {raw_signal}\n")
+                            sys.stdout.write(f"❌ [VALIDATION CRASH] Ошибка Pydantic ядра v5.3.8: {inner_e} | RAW JSON: {raw_signal}\n")
                             sys.stdout.flush()
             except Exception as e:
-                sys.stdout.write(f"[{datetime.now().isoformat()}] ❌ Критический сбой слоя ИИ-Файрволла v2.1: {e}\n")
+                sys.stdout.write(f"❌ Критический сбой слоя ИИ-Файрволла v2.1: {e}\n")
                 sys.stdout.flush()
                 stats["errors"].append(f"AI error: {e}")
 
-        # Слой финальной гигиены данных перед отгрузкой — ВРЕМЕННО ПОД ПРЯМОЙ ПРОЛИВ
+        # Слой финальной гигиены данных перед отгрузкой — ПРЯМОЙ СЛИВ ПО ТЗ
         final_approved = approved
         stats["signals_approved"] = len(final_approved)
         
@@ -248,7 +244,6 @@ class Engine:
             if not hasattr(self, '_writer') or self._writer is None:
                 self._writer = StorageWriter(self._gsheets_client)
             
-            # Принудительно заставляем внутренний буфер отдать строки в Google Sheets
             await self._writer.write_signals(signals)
             if hasattr(self._writer, 'flush'):
                 await self._writer.flush()
