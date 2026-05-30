@@ -3,29 +3,27 @@ KRAKEN Channel Manager — Управление реестром каналов.
 
 Фаза 4: ЯДЕРНЫЕ КОМПОНЕНТЫ
 Модуль: 4.2 channel_manager.py
-Версия: v5.2.3
-
-Принципы:
-- Загрузка каналов из Google Sheets (tg_channels)
-- Кэширование на 1 час
-- Дифференциация по tier (Tier 1 — каждый цикл, Tier 4 — каждый 8-й)
-- Бан каналов при ошибках
+Версия: v5.3.2 (SRE 5.0 CORE SYNCHRONIZED — DECOUPLING COMPLETE)
+Дата/Время стабилизации: 2026-05-30 16:35:00 UTC
 """
 
 import sys
+import re
 from pathlib import Path
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Optional, Dict
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from models.signal import ChannelRegistryEntry, ChannelStatus, ChannelTier
-
+from models.signal import (
+    ChannelRegistryEntry, 
+    ChannelStatus, 
+    SourceType, 
+    GeoFocus
+)
 
 # ===== КОНСТАНТЫ =====
-
 # Частота опроса: Tier 1 → каждый цикл, Tier 2 → каждый 2-й, Tier 3 → каждый 4-й, Tier 4 → каждый 8-й
-# Tier 5 (спам) — исключён из сбора
 TIER_FREQUENCY: Dict[int, int] = {
     1: 1,   # Каждый цикл (каждые 15 минут)
     2: 2,   # Каждые 30 минут
@@ -38,36 +36,21 @@ TIER_FREQUENCY: Dict[int, int] = {
 class ChannelManager:
     """
     Управляет реестром каналов для сбора сигналов.
-    
     Загружает список из Google Sheets, кэширует на час,
-    и отдаёт нужные каналы в зависимости от tier и номера цикла.
-    
-    Использование:
-        mgr = ChannelManager(gsheets_client)
-        channels = mgr.get_channels_for_cycle(cycle_counter=42)
+    обеспечивает безопасность типов и отказоустойчивость.
     """
     
     def __init__(self, gsheets_client=None):
-        """
-        Args:
-            gsheets_client: GoogleSheetsClient для загрузки каналов.
-                           Если None — будет создан при первом использовании.
-        """
         self._gsheets_client = gsheets_client
         self.channels_cache: List[ChannelRegistryEntry] = []
         self.last_load: Optional[datetime] = None
         self.banned_cache: set = set()
         self.cache_ttl_seconds: int = 3600  # 1 час
     
-    # ===== 4.2.1. ЗАГРУЗКА КАНАЛОВ =====
+    # ===== 4.2.1. ЗАГРУЗКА КАНАЛОВ И ВАЛИДАЦИЯ ТИПОВ =====
     
     async def load_channels(self) -> List[ChannelRegistryEntry]:
-        """
-        Загружает реестр каналов из Google Sheets.
-        
-        Returns:
-            Список ВСЕХ каналов из листа tg_channels.
-        """
+        """Загружает реестр каналов из Google Sheets с жесткой нормализацией типов."""
         if self._gsheets_client is None:
             from clients.gsheets_client import GoogleSheetsClient
             self._gsheets_client = GoogleSheetsClient()
@@ -75,142 +58,131 @@ class ChannelManager:
         try:
             rows = self._gsheets_client.load_channels()
             
-            self.channels_cache = []
+            new_cache = []
             for row in rows:
                 try:
+                    raw_id = str(row.get("channel_id", "")).strip()
+                    if not raw_id:
+                        continue
+                        
+                    # ГВАРДЕЙСКИЙ НАКАТ ТИПОВ: Выжигаем строки из tier
+                    raw_tier = row.get("tier", 3)
+                    if isinstance(raw_tier, str):
+                        digits = re.findall(r'\d+', raw_tier)
+                        tier_val = int(digits[0]) if digits else 3
+                    else:
+                        tier_val = int(raw_tier)
+                        
+                    # Безопасная нормализация Enum-строк из таблицы
+                    st_val = str(row.get("source_type", "NEWS")).upper().strip()
+                    if st_val not in SourceType.__members__:
+                        st_val = "NEWS"
+                        
+                    geo_val = str(row.get("geo_focus", "ROSTOV_CITY")).upper().strip()
+                    if geo_val not in GeoFocus.__members__:
+                        geo_val = "ROSTOV_CITY"
+                        
+                    status_val = str(row.get("status", "ACTIVE")).upper().strip()
+                    
                     channel = ChannelRegistryEntry(
-                        channel_id=row.get("channel_id", ""),
-                        title=row.get("title", ""),
-                        source_type=row.get("source_type", "NEWS"),
-                        tier=row.get("tier", 3),
-                        geo_focus=row.get("geo_focus", "ROSTOV_CITY"),
-                        status=row.get("status", "ACTIVE"),
+                        channel_id=raw_id,
+                        title=str(row.get("title", "")).strip(),
+                        source_type=SourceType(st_val),
+                        tier=tier_val,
+                        geo_focus=GeoFocus(geo_val),
+                        status=ChannelStatus(status_val),
                         last_scan=row.get("last_scan") if row.get("last_scan") else None,
-                        subscribers=row.get("subscribers"),
-                        avg_reach=row.get("avg_reach"),
-                        engagement=row.get("engagement"),
-                        citation_index=row.get("citation_index"),
-                        content_quality=row.get("content_quality"),
-                        fraud_signs=row.get("fraud_signs")
+                        subscribers=int(row.get("subscribers")) if row.get("subscribers") else None
                     )
-                    self.channels_cache.append(channel)
-                except Exception as e:
-                    print(f"⚠️ Skipping invalid channel row: {e}")
+                    new_cache.append(channel)
+                except Exception as row_e:
+                    sys.stdout.write(f"⚠️ [SRE ТИПЫ] Пропущен невалидный канал в таблице: {row_e}\n")
+                    sys.stdout.flush()
             
+            self.channels_cache = new_cache
             self.last_load = datetime.now()
-            print(f"✅ Loaded {len(self.channels_cache)} channels from registry")
+            sys.stdout.write(f"✅ Loaded {len(self.channels_cache)} channels from registry\n")
+            sys.stdout.flush()
             return self.channels_cache
             
         except Exception as e:
-            print(f"❌ Failed to load channels: {e}")
-            # Если есть кэш — используем его
-            if self.channels_cache:
-                print(f"⚠️ Using cached channels ({len(self.channels_cache)} entries)")
+            sys.stdout.write(f"❌ Failed to load channels: {e}\n")
+            sys.stdout.flush()
             return self.channels_cache
     
     # ===== 4.2.2. АКТИВНЫЕ КАНАЛЫ =====
     
     def get_active_channels(self) -> List[ChannelRegistryEntry]:
-        """
-        Возвращает только каналы со статусом ACTIVE и не из banned_cache.
-        """
+        """Возвращает только каналы со статусом ACTIVE и не из banned_cache."""
         return [
             ch for ch in self.channels_cache
-            if ch.status == "ACTIVE" and ch.channel_id not in self.banned_cache
+            if ch.status == ChannelStatus.ACTIVE and ch.channel_id not in self.banned_cache
         ]
     
-    # ===== 4.2.3. ДИФФЕРЕНЦИАЦИЯ ПО TIER =====
+    # ===== 4.2.3. ДИФФЕРЕНЦИАЦИЯ ПО TIER (БЕЗ СТРОКОВЫХ ОШИБОК) =====
     
     def get_channels_for_cycle(self, cycle_counter: int) -> List[ChannelRegistryEntry]:
-        """
-        Возвращает каналы для конкретного цикла сбора.
-        
-        Логика:
-        - Tier 1: каждый цикл (cycle_counter % 1 == 0 → всегда)
-        - Tier 2: каждый 2-й цикл
-        - Tier 3: каждый 4-й цикл
-        - Tier 4: каждый 8-й цикл
-        - Tier 5: никогда (спам)
-        
-        Args:
-            cycle_counter: Номер текущего цикла (1, 2, 3...)
-        
-        Returns:
-            Список каналов, которые нужно опросить в этом цикле.
-        """
+        """Возвращает каналы для конкретного цикла сбора."""
         active = self.get_active_channels()
         selected = []
         
         for ch in active:
+            # ch.tier гарантированно int благодаря load_channels()
             freq = TIER_FREQUENCY.get(ch.tier, 0)
             if freq == 0:
-                continue  # Tier 5 — никогда
+                continue  # Tier 5 — спам, пропускаем
             if cycle_counter % freq == 0:
                 selected.append(ch)
         
-        print(f"📡 Cycle #{cycle_counter}: selected {len(selected)}/{len(active)} channels "
-              f"(T1={sum(1 for c in selected if c.tier==1)}, "
-              f"T2={sum(1 for c in selected if c.tier==2)}, "
-              f"T3={sum(1 for c in selected if c.tier==3)}, "
-              f"T4={sum(1 for c in selected if c.tier==4)})")
-        
+        sys.stdout.write(
+            f"📡 Cycle #{cycle_counter}: selected {len(selected)}/{len(active)} channels "
+            f"(T1={sum(1 for c in selected if c.tier==1)}, "
+            f"T2={sum(1 for c in selected if c.tier==2)}, "
+            f"T3={sum(1 for c in selected if c.tier==3)}, "
+            f"T4={sum(1 for c in selected if c.tier==4)})\n"
+        )
+        sys.stdout.flush()
         return selected
     
-    # ===== 4.2.4. БАН КАНАЛА =====
+    # ===== 4.2.4. ПЕРСИСТЕНТНЫЙ БАН КАНАЛА =====
     
     async def ban_channel(self, channel_id: str, reason: str = "Unknown"):
-        """
-        Банит канал: добавляет в локальный кэш и обновляет Google Sheets.
-        
-        Args:
-            channel_id: ID канала (@username)
-            reason: Причина бана (для логов)
-        """
+        """Банит канал локально и синхронизирует статус напрямую в Google Sheets."""
         if channel_id in self.banned_cache:
             return
         
         self.banned_cache.add(channel_id)
-        print(f"🚫 Channel banned: {channel_id} ({reason})")
+        sys.stdout.write(f"🚫 Channel banned: {channel_id} ({reason})\n")
+        sys.stdout.flush()
         
-        # Обновляем статус в Google Sheets
-        if self._gsheets_client:
+        # Обновляем статус локально
+        for ch in self.channels_cache:
+            if ch.channel_id == channel_id:
+                ch.status = ChannelStatus.BANNED
+                break
+                
+        # ЖЕСТКАЯ ПЕРСИСТЕНТНОСТЬ: Пишем обратно в Google Sheets
+        if self._gsheets_client and hasattr(self._gsheets_client, 'update_channel_status'):
             try:
-                # Обновляем поле status в кэше
-                for ch in self.channels_cache:
-                    if ch.channel_id == channel_id:
-                        ch.status = "BANNED"
-                        break
+                await self._gsheets_client.update_channel_status(channel_id, "BANNED")
             except Exception as e:
-                print(f"⚠️ Could not update channel status: {e}")
+                sys.stdout.write(f"⚠️ Could not update remote channel status in Sheets: {e}\n")
+                sys.stdout.flush()
     
-    # ===== 4.2.6. КЭШИРОВАНИЕ =====
+    # ===== 4.2.6. АВТОМАТИЧЕСКИЙ СБРОС КЭША =====
     
     async def ensure_fresh_cache(self) -> List[ChannelRegistryEntry]:
-        """
-        Проверяет актуальность кэша и обновляет при необходимости.
-        
-        Если с момента последней загрузки прошло больше часа —
-        перезагружает каналы из Google Sheets.
-        
-        Returns:
-            Актуальный список каналов.
-        """
+        """Проверяет актуальность кэша и обновляет при необходимости."""
         if self.last_load is None:
-            print("📡 Cache empty, loading channels...")
             return await self.load_channels()
         
         age = (datetime.now() - self.last_load).total_seconds()
         if age > self.cache_ttl_seconds:
-            print(f"📡 Cache expired ({age:.0f}s old), reloading...")
             return await self.load_channels()
-        
-        print(f"📡 Using cached channels ({len(self.channels_cache)} entries, {age:.0f}s old)")
+            
         return self.channels_cache
     
-    # ===== СТАТИСТИКА =====
-    
     def get_stats(self) -> dict:
-        """Возвращает статистику по каналам."""
         active = self.get_active_channels()
         by_tier = {1: 0, 2: 0, 3: 0, 4: 0, 5: 0}
         for ch in active:
