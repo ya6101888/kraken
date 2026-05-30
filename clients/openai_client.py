@@ -3,8 +3,8 @@ KRAKEN OpenAI Client — AI-классификатор сигналов.
 
 Фаза 3: ИНТЕГРАЦИИ
 Модуль: 3.2 openai_client.py
-Версия: v5.3.9 (SRE 5.0 RUNTIME ADAPTER — ABSOLUTE FLAT SYNCHRONIZED)
-Дата/Время стабилизации: 2026-05-30 20:50:00 UTC
+Версия: v5.4.0 (SRE 5.0 RUNTIME ADAPTER — CONCURRENCY SEMAPHORE FIXED)
+Дата/Время стабилизации: 2026-05-30 20:53:00 UTC
 """
 
 import os
@@ -100,39 +100,39 @@ class OpenAIClient:
                 return prompt_path.read_text(encoding="utf-8")
         raise FileNotFoundError("❌ Critical error: prompts/platinum_prompt.txt not found!")
 
-    async def _process_single_message_async(self, idx: int, msg: str) -> Optional[Dict]:
-        """Изолированная атомарная транзакция по абсолютно плоскому контракту v1.4.0."""
-        clean_in = msg.strip()
-        client = self.client
-        try:
-            response = await asyncio.wait_for(
-                client.chat.completions.create(
-                    model=self.model,
-                    messages=[
-                        {"role": "system", "content": self.platinum_prompt},
-                        {"role": "user", "content": f"Сырое сообщение для анализа:\n{clean_in}"}
-                    ],
-                    temperature=self.temperature,
-                    max_tokens=self.max_tokens,
-                    response_format={"type": "json_object"}
-                ),
-                timeout=self.timeout
-            )
+    async def _process_single_message_async(self, semaphore: asyncio.Semaphore, idx: int, msg: str) -> Optional[Dict]:
+        """Изолированная атомарная транзакция под защитой семафора по плоскому контракту v1.4.0."""
+        async with semaphore:
+            clean_in = msg.strip()
+            client = self.client
+            try:
+                response = await asyncio.wait_for(
+                    client.chat.completions.create(
+                        model=self.model,
+                        messages=[
+                            {"role": "system", "content": self.platinum_prompt},
+                            {"role": "user", "content": f"Сырое сообщение для анализа:\n{clean_in}"}
+                        ],
+                        temperature=self.temperature,
+                        max_tokens=self.max_tokens,
+                        response_format={"type": "json_object"}
+                    ),
+                    timeout=self.timeout
+                )
 
-            raw_content = response.choices[0].message.content
-            sig = json.loads(raw_content)
+                raw_content = response.choices[0].message.content
+                sig = json.loads(raw_content)
 
-            if isinstance(sig, dict):
-                # Навешиваем индекс для сохранения логики маппинга в пуле
-                sig["message_index"] = idx
-                return sig
-        except Exception as e:
-            sys.stdout.write(f"⚠️ [AI Client Exception]: {e}\n")
-            sys.stdout.flush()
-        return None
+                if isinstance(sig, dict):
+                    sig["message_index"] = idx
+                    return sig
+            except Exception as e:
+                sys.stdout.write(f"⚠️ [AI Client Connection Error]: {e}\n")
+                sys.stdout.flush()
+            return None
 
     async def classify_batch(self, messages: List[str]) -> Optional[Dict]:
-        """Параллельный неблокирующий обстрел OpenAI с плоской сборкой сигналов."""
+        """Параллельный обстрел OpenAI с жестким ограничением конкурентности."""
         if not self.api_key:
             log_sre("⚠️ OPENAI_API_KEY not set")
             return None
@@ -142,7 +142,10 @@ class OpenAIClient:
 
         log_sre(f"🧠 ИИ-Файрволл: Запуск СИНХРОНИЗИРОВАННОГО пула для {len(messages)} сообщений.")
 
-        tasks = [self._process_single_message_async(idx, msg) for idx, msg in enumerate(messages)]
+        # Ограничиваем поток до 5 параллельных слотов, чтобы не вешать TCP-таблицу Squid прокси
+        sem = asyncio.Semaphore(5)
+
+        tasks = [self._process_single_message_async(sem, idx, msg) for idx, msg in enumerate(messages)]
         results = await asyncio.gather(*tasks)
 
         combined_signals = []
