@@ -3,8 +3,8 @@ KRAKEN Data Models — ДНК структуры данных.
 
 Фаза 2: МОДЕЛИ ДАННЫХ
 Модуль: 2.1 signal.py
-Версия: v2.2.5 (SRE 5.0 CANONICAL — МАТРИЦА v2.1 — STUDIO VALIDATION FIXED)
-Дата стабилизации: 2026-05-30 18:42:00 UTC
+Версия: v2.2.6 (SRE 5.0 CANONICAL — FIELD VALIDATION BOUNDS EXPANDED)
+Дата стабилизации: 2026-05-30 20:15:00 UTC
 """
 
 import re
@@ -122,7 +122,10 @@ class ApprovedSignal(BaseModel):
     channel_name: str = Field(min_length=1, max_length=200)
     message_id: int = Field(ge=1)
     market_segment: MarketSegment = Field(default=MarketSegment.SECONDARY)
-    segment_confidence: float = Field(default=0.95, ge=0.70, le=1.00)
+    
+    # ИСПРАВЛЕНО: Расширен диапазон ge=0.0 для предотвращения падения при сомнениях ИИ
+    segment_confidence: float = Field(default=0.95, ge=0.00, le=1.00)
+    
     source_type: SourceType = Field(default=SourceType.AGENCY)
     source_tier: int = Field(default=3, ge=1, le=5)
     geo_focus: GeoFocus = Field(default=GeoFocus.ROSTOV_CITY)
@@ -141,7 +144,10 @@ class ApprovedSignal(BaseModel):
     # Текстовые контейнеры и логистика
     original_content: str = Field(max_length=10000)
     cleaned_content: str = Field(max_length=4000)
-    relevance_score: float = Field(default=0.85, ge=0.70, le=1.00)
+    
+    # ИСПРАВЛЕНО: Расширен диапазон ge=0.0 для синхронизации со свободным промптом
+    relevance_score: float = Field(default=0.85, ge=0.00, le=1.00)
+    
     collected_at: datetime = Field(default_factory=datetime.now)
     is_approved: bool = Field(default=True)
     wf06_used_at: Optional[datetime] = None
