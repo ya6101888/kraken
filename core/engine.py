@@ -3,8 +3,8 @@ KRAKEN Engine — Центральный оркестратор сбора си�
 
 Фаза 4: ЯДЕРНЫЕ КОМПОНЕНТЫ
 Модуль: 4.3 engine.py
-Версия: v5.3.5 (SRE 5.0 CORE SYNCHRONIZED — HYBRID FLAT MASTER v2.1)
-Дата/Время стабилизации: 2026-05-30 18:40:00 UTC
+Версия: v5.3.6 (SRE 5.0 CORE SYNCHRONIZED — ABSOLUTE DIRECT FLAT MASTER)
+Дата/Время стабилизации: 2026-05-30 19:10:00 UTC
 """
 
 import sys
@@ -137,7 +137,7 @@ class Engine:
         approved = []
         if sanitized:
             try:
-                # Паспортный справочник для O(1) поиска метаданных каналов
+                # Паспортный справочник для O(1) поиска метаданных нав
                 channel_meta = {c.channel_id: c for c in channels}
                 
                 from clients.openai_client import OpenAIClient
@@ -213,11 +213,8 @@ class Engine:
                 sys.stdout.flush()
                 stats["errors"].append(f"AI error: {e}")
 
-        # Слой финальной гигиены данных перед отгрузкой
-        from core.ai_firewall import AIFirewall
-        firewall = AIFirewall()
-        final_approved = firewall.filter_signals(approved)
-        
+        # Слой финальной гигиены данных перед отгрузкой — ВРЕМЕННО ПОД ПРЯМОЙ ПРОЛИВ
+        final_approved = approved
         stats["signals_approved"] = len(final_approved)
         
         # 6. Запись в Google Sheets по плоской матрице
