@@ -1,10 +1,11 @@
 """
 Squid
-🦑 KRAKEN v5.2.3 — Главный входной файл.
+🦑 KRAKEN v5.3.2 — Главный входной файл.
 
 Фаза 5: ОРКЕСТРАЦИЯ
 Модуль: main.py
-Версия: v5.2.3 (GOLDEN MASTER SRE 5.0)
+Версия: v5.3.2 (GOLDEN MASTER SRE 5.0 — TRIGGER FIXED)
+Дата стабилизации: 2026-05-30 17:10:00 UTC
 """
 
 import sys
@@ -49,7 +50,7 @@ async def lifespan(app: FastAPI):
     
     # ========== STARTUP ==========
     log_sre("============================================================")
-    log_sre("🦑 KRAKEN v5.2.3 GOLDEN ASSEMBLY STARTING...")
+    log_sre("🦑 KRAKEN v5.3.2 GOLDEN ASSEMBLY STARTING...")
     log_sre(f"   Environment: {settings.INFRA_ENVIRONMENT}")
     log_sre(f"   Interval: {settings.KRAKEN_CRON_INTERVAL_MINUTES} min")
     log_sre("============================================================")
@@ -106,14 +107,14 @@ async def lifespan(app: FastAPI):
         log_sre("📤 Sending synchronous startup contract alert to Telegram...")
         await beacon_obj.alert(
             severity="INFO",
-            message="🚨 KRAKEN v5.2.3 RELEASE LIVE\n\n• Статус: СЕТЬ СТАБИЛЬНА\n• Контракт: Вложенный DTO v1.2 активирован\n• Контур: Точка входа main.py стабилизирована\n\n⚙️ Деталь пошла по конвейеру, Архитектор!"
+            message="🚨 KRAKEN v5.3.2 RELEASE LIVE\n\n• Статус: СЕТЬ СТАБИЛЬНА\n• Контракт: Выпрямленная матрица v2.1 активирована\n• Контур: Точка входа main.py полностью стабилизирована\n\n⚙️ Деталь пошла по конвейеру, Архитектор!"
         )
         log_sre("🟢 [SRE] Стартовый набат успешно доставлен через шлюз Squid!")
     except Exception as beacon_err:
         log_sre(f"⚠️ [WARNING] Стартовый набат заблокирован шлюзом: {beacon_err}")
 
     log_sre("============================================================")
-    log_sre("🏆 KRAKEN v5.2.3 GOLDEN MASTER ИГРАЕТ ВДЛИННУЮ! КОНТУР ГОТОВ!")
+    log_sre("🏆 KRAKEN v5.3.2 GOLDEN MASTER ИГРАЕТ ВДЛИННУЮ! КОНТУР ГОТОВ!")
     log_sre("============================================================")
     
     yield  # Рантайм сервиса
@@ -124,8 +125,14 @@ async def lifespan(app: FastAPI):
     log_sre("============================================================")
     
     if trigger:
-        trigger.stop()
-        log_sre("✅ CRON scheduler stopped")
+        try:
+            if hasattr(trigger, 'stop'):
+                trigger.stop()
+            elif hasattr(trigger, 'shutdown'):
+                trigger.shutdown()
+            log_sre("✅ CRON scheduler stopped")
+        except Exception as e:
+            log_sre(f"⚠️ Non-critical trigger stop exception: {e}")
     
     for task in [heartbeat_task, beacon_health_task, beacon_watcher_task]:
         if task and not task.done():
@@ -153,8 +160,8 @@ async def lifespan(app: FastAPI):
 # ===== FastAPI Инициализация =====
 
 app = FastAPI(
-    title=" Squid KRAKEN ETL Service",
-    version="5.2.3",
+    title="Squid KRAKEN ETL Service",
+    version="5.3.2",
     description="Сборщик сигналов недвижимости из Telegram с AI-фильтрацией стандарта SRE 5.0",
     lifespan=lifespan
 )
@@ -165,7 +172,7 @@ async def root_ping():
     return {
         "status": "ok",
         "service": "KRAKEN",
-        "version": "5.2.3",
+        "version": "5.3.2",
         "timestamp": datetime.now().isoformat()
     }
 
@@ -174,7 +181,7 @@ async def root_ping():
 async def health_check():
     return {
         "status": "ok",
-        "version": "5.2.3",
+        "version": "5.3.2",
         "timestamp": datetime.now().isoformat(),
         "uptime_seconds": (datetime.now() - start_time).total_seconds()
     }
@@ -205,7 +212,7 @@ async def metrics():
 @app.get("/status")
 async def system_status():
     return {
-        "version": "5.2.3",
+        "version": "5.3.2",
         "environment": settings.INFRA_ENVIRONMENT,
         "start_time": start_time.isoformat(),
         "uptime_seconds": (datetime.now() - start_time).total_seconds(),
@@ -220,21 +227,19 @@ async def system_status():
 
 @app.post("/flush")
 async def manual_buffer_flush():
-    if engine and hasattr(engine, '_writer') and engine._writer:
+    """Принудительная педаль слива буфера на лету через глобальный storage_writer."""
+    if storage_writer:
         try:
-            await engine._writer.flush()
+            await storage_writer.flush()
             return {
                 "status": "success",
-                "message": "Буфер успешно сброшен в Google Sheets на ходу!",
+                "message": "Канонический буфер успешно вытолкнут в Google Sheets на ходу!",
                 "timestamp": datetime.now().isoformat()
             }
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Ошибка сброса буфера: {e}")
     else:
-        return {
-            "status": "ignored",
-            "message": "Буфер пуст или StorageWriter еще не инициализирован движком."
-        }
+        raise HTTPException(status_code=503, detail="StorageWriter верхнего уровня еще не инициализирован.")
 
 
 if __name__ == "__main__":
