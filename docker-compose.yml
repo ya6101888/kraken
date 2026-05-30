@@ -10,6 +10,9 @@ services:
     env_file:
       - /opt/kraken/secrets/.env
     volumes:
+      - /opt/kraken/core:/app/core
+      - /opt/kraken/models:/app/models
+      - /opt/kraken/main.py:/app/main.py
       - /opt/kraken/secrets:/app/secrets:ro
       - /opt/kraken/sessions:/app/sessions
       - /opt/kraken/logs:/app/logs
