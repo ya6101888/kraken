@@ -3,10 +3,10 @@ KRAKEN Data Models — ДНК структуры данных.
 
 Фаза 2: МОДЕЛИ ДАННЫХ
 Модуль: 2.1 signal.py
-Версия: v2.1 GOLDEN MASTER (SRE 5.0 Canon)
+Версия: v2.2.0 (SRE 5.0 CANONICAL — МАТРИЦА v1.2 — ПОЛНЫЙ СИНХРОН)
+Дата стабилизации: 2026-05-30 16:30:00 UTC
 """
 
-import os
 import re
 from enum import Enum
 from datetime import datetime
@@ -15,16 +15,17 @@ from pydantic import BaseModel, Field, model_validator
 
 
 # ==========================================
-# 1. IMMUTABLE ENUMS (ГЕО, СЕГМЕНТЫ, СТАТУСЫ И ОТК)
+# 1. IMMUTABLE ENUMS (СТРОГИЙ САНКЦИОНИРОВАННЫЙ СЛОЙ)
 # ==========================================
 
 class MarketSegment(str, Enum):
-    PRIMARY = "PRIMARY"      # Новостройки
-    SECONDARY = "SECONDARY"  # Вторичка
+    PRIMARY = "PRIMARY"      # Первичный рынок
+    SECONDARY = "SECONDARY"  # Вторичный рынок
     RENT = "RENT"            # Аренда
     INVEST = "INVEST"        # Инвестиции
-    PRO = "PRO"              # Проф. аналитика ЮФО
-    NULL = "NULL"            # Не определен
+    PRO = "PRO"              # Профессиональный B2B
+    NULL = "NULL"            # Дефолтный сброс
+
 
 class GeoFocus(str, Enum):
     ROSTOV_CITY = "ROSTOV_CITY"
@@ -33,6 +34,7 @@ class GeoFocus(str, Enum):
     FEDERAL = "FEDERAL"
     NULL = "NULL"
 
+
 class SourceType(str, Enum):
     ANALYTIC = "ANALYTIC"
     DEVELOPER = "DEVELOPER"
@@ -40,20 +42,14 @@ class SourceType(str, Enum):
     AGENCY = "AGENCY"
     PRIVATE = "PRIVATE"
 
+
 class ChannelStatus(str, Enum):
     ACTIVE = "ACTIVE"
     TESTING = "TESTING"
     BANNED = "BANNED"
 
-class ChannelTier(int, Enum):
-    TIER_1 = 1
-    TIER_2 = 2
-    TIER_3 = 3
-    TIER_4 = 4
-    TIER_5 = 5
 
 class RejectReason(str, Enum):
-    """Причины отбраковки сообщения спам-фильтром Harvester."""
     DUPLICATE = "DUPLICATE"
     SHORT_TEXT = "SHORT_TEXT"
     MUTED_KEYWORD = "MUTED_KEYWORD"
@@ -62,7 +58,7 @@ class RejectReason(str, Enum):
 
 
 # ==========================================
-# 2. СТАРЫЕ МОДЕЛИ (ПОЛНАЯ ОБРАТНАЯ СОВМЕСТИМОСТЬ)
+# 2. СИСТЕМНЫЕ СТРУКТУРЫ ТРАНЗИТА (ПОТОК ДАННЫХ)
 # ==========================================
 
 class RawTelegramMessage(BaseModel):
@@ -75,17 +71,20 @@ class RawTelegramMessage(BaseModel):
     from_id: Optional[int] = Field(default=None)
     views: Optional[int] = Field(default=None, ge=0)
 
+
 class RawMessageWithTrace(RawTelegramMessage):
     """Сообщение со сквозным trace_id."""
     trace_id: str = Field(pattern=r"^KRAKEN_\d{8}_\d{6}_[a-f0-9]{8}$")
     collected_at: datetime = Field(default_factory=datetime.now)
+
 
 class SanitizedMessage(RawMessageWithTrace):
     """Сообщение после обработки подсистемой Harvester."""
     content_hash: str = Field(pattern=r"^[a-f0-9]{64}$")
     cleaned_content: str = Field(max_length=4000)
     is_rejected: bool = Field(default=False)
-    reject_reason: Optional[str] = Field(default=None)
+    reject_reason: Optional[RejectReason] = Field(default=None)
+
 
 class ChannelRegistryEntry(BaseModel):
     """Канал в реестре конфигурации tg_channels."""
@@ -96,6 +95,7 @@ class ChannelRegistryEntry(BaseModel):
     geo_focus: GeoFocus = Field(default=GeoFocus.ROSTOV_CITY)
     status: ChannelStatus = Field(default=ChannelStatus.ACTIVE)
     last_scan: Optional[datetime] = None
+
 
 class MiningCycleLog(BaseModel):
     """Лог цикла сбора данных для листа tg_mining_log."""
@@ -109,104 +109,89 @@ class MiningCycleLog(BaseModel):
     errors: Optional[List[str]] = None
     floodwait_seconds: Optional[int] = None
 
-class GoogleSheetsRow(BaseModel):
-    """
-    Плоская модель для записи в Google Sheets.
-    Полная совместимость со старыми вызовами + расширение до 23 колонок v1.2.
-    """
-    signal_id: str = ""
-    trace_id: str = ""
-    channel_name: str = ""
-    message_id: int = 0
-    content: Optional[str] = None
-    relevance_score: float = 0.0
-    market_segment: Optional[str] = None
-    geo_focus: Optional[str] = None
-    price: Optional[int] = None
-    rooms: Optional[int] = None
-    area: Optional[float] = None
-    floor: Optional[str] = None
-    address: Optional[str] = None
-    developer: Optional[str] = None
-    completion_date: Optional[str] = None
-    collected_at: datetime = Field(default_factory=datetime.now)
-    is_approved: bool = True
-    wf06_used_at: Optional[datetime] = None
-    
-    # Новые поля контракта v1.2
-    classification: Optional[str] = None
-    segment_confidence: float = 1.0
-    source_type: str = "AGENCY"
-    source_tier: int = 3
-    priority_score: float = 0.0
-    object_price: Optional[int] = None
-    object_address: Optional[str] = None
-    object_rooms: Optional[int] = None
-    object_area: Optional[float] = None
-    object_floor: Optional[str] = None
-    object_developer: Optional[str] = None
-    object_completion_date: Optional[str] = None
-    original_content: str = ""
-    cleaned_content: str = ""
-
-class BatchAIResponse(BaseModel):
-    """Служебный контейнер для валидации ответов от OpenAI Client."""
-    results: List[Any] = Field(default_factory=list)
-
 
 # ==========================================
-# 3. НОВЫЕ DTO v1.2 (ВЛОЖЕННЫЕ СТРУКТУРЫ)
+# 3. КАНОНИЧЕСКИЙ ПЛОСКИЙ СИГНАЛ v1.2 (25 СТОЛБЦОВ ТЗ)
 # ==========================================
 
-class SourcePassport(BaseModel):
-    """Паспорт источника сигнала."""
+class ApprovedSignal(BaseModel):
+    """Канонический плоский DTO Сигнала SRE 5.0 под спецификацию матрицы v1.2."""
+    signal_id: str = Field(pattern=r"^SIG_[A-Za-z0-9_–\-]+_\d+$")
+    trace_id: str = Field(pattern=r"^KRAKEN_.*")
+    channel_id: str = Field(min_length=1, max_length=100)
+    channel_name: str = Field(min_length=1, max_length=200)
+    message_id: int = Field(ge=1)
+    market_segment: MarketSegment = Field(default=MarketSegment.SECONDARY)
+    segment_confidence: float = Field(default=0.95, ge=0.70, le=1.00)
     source_type: SourceType = Field(default=SourceType.AGENCY)
     source_tier: int = Field(default=3, ge=1, le=5)
-
-class ObjectDetails(BaseModel):
-    """Детальные метрики физического объекта недвижимости."""
-    price: Optional[int] = Field(default=None)
-    address: Optional[str] = Field(default=None)
-    rooms: Optional[int] = Field(default=None)
-    area: Optional[float] = Field(default=None)
-    floor: Optional[str] = Field(default=None)
-    developer: Optional[str] = Field(default=None)
+    geo_focus: GeoFocus = Field(default=GeoFocus.ROSTOV_CITY)
+    priority_score: float = Field(default=0.0)
+    
+    # Плоская бизнес-матрица — Защита от дробных цен ИИ через float тип на входе
+    price: Optional[float] = Field(default=None, ge=0)
+    address: Optional[str] = Field(default=None, max_length=500)
+    rooms: Optional[int] = Field(default=None, ge=1, le=10)
+    area: Optional[float] = Field(default=None, ge=1.0, le=1000.0)
+    floor: Optional[str] = Field(default=None, max_length=50)
+    developer: Optional[str] = Field(default=None, max_length=200)
     completion_date: Optional[str] = Field(default=None)
-
-class ApprovedSignalV2(BaseModel):
-    """Каноничный DTO Сигнала SRE 5.0 v1.2 с вложенными паспортами."""
-    signal_id: str
-    trace_id: str
-    channel_name: str
-    message_id: int
-    classification: MarketSegment = Field(default=MarketSegment.PRIMARY)
-    segment_confidence: float = Field(default=1.0, ge=0.0, le=1.0)
-    source: SourcePassport = Field(default_factory=SourcePassport)
-    geo: GeoFocus = Field(default=GeoFocus.ROSTOV_CITY)
-    object_data: ObjectDetails = Field(default_factory=ObjectDetails)
-    original_content: str
-    cleaned_content: str
-    relevance_score: float = Field(ge=0.0, le=1.0)
+    phone_number: Optional[str] = Field(default=None, max_length=50)
+    
+    # Текстовые контейнеры и логистика
+    original_content: str = Field(max_length=10000)
+    cleaned_content: str = Field(max_length=4000)
+    relevance_score: float = Field(default=0.85, ge=0.70, le=1.00)
     collected_at: datetime = Field(default_factory=datetime.now)
     is_approved: bool = Field(default=True)
     wf06_used_at: Optional[datetime] = None
-    priority_score: float = Field(default=0.0)
 
     @model_validator(mode="after")
-    def calculate_sre_metrics(self) -> 'ApprovedSignalV2':
-        # 1. Рассчет приоритета по SRE-формуле
-        confidence = self.segment_confidence
-        tier = self.source.source_tier
-        raw_score = confidence * ((6.0 - tier) / 5.0) * 4.0
-        self.priority_score = max(0.0, min(4.0, round(raw_score, 2)))
+    def compute_and_normalize_canon(self) -> 'ApprovedSignal':
+        # 1. Валидация маски даты сдачи (Strict ISO Month: YYYY-MM)
+        if self.completion_date:
+            if not re.match(r'^\d{4}-\d{2}$', str(self.completion_date)):
+                self.completion_date = None
+                
+        # 2. Интеллектуальная нормализация цен риелторов (перевод дробных млн/тыс строго в рубли-инты)
+        if self.price and self.price > 0:
+            if self.price < 100_000:
+                self.price = self.price * 1000 if self.price > 10_000 else self.price * 1_000_000
+            self.price = int(round(self.price))
+
+        # 3. Расчет priority_score по канонической SRE-формуле ТЗ v1.2
+        source_bonus = (5 - self.source_tier) * 0.4
         
-        # 2. Интеллектуальное масштабирование цен в рубли
-        if self.object_data and self.object_data.price:
-            p = self.object_data.price
-            if p < 100_000:
-                self.object_data.price = p * 1000 if p > 10_000 else p * 1000000
+        geo_bonuses = {
+            GeoFocus.ROSTOV_CITY: 0.4,
+            GeoFocus.ROSTOV_REGION: 0.2,
+            GeoFocus.SOUTHERN_FEDERAL_DISTRICT: 0.1,
+            GeoFocus.FEDERAL: 0.0
+        }
+        geo_bonus = geo_bonuses.get(self.geo_focus, 0.0)
+        
+        segment_bonuses = {
+            MarketSegment.PRIMARY: 0.3,
+            MarketSegment.SECONDARY: 0.2,
+            MarketSegment.INVEST: 0.3,
+            MarketSegment.RENT: 0.1,
+            MarketSegment.PRO: 0.0
+        }
+        segment_bonus = segment_bonuses.get(self.market_segment, 0.0)
+        
+        self.priority_score = round(source_bonus + geo_bonus + segment_bonus, 2)
         return self
 
 
-# Глобальный алиас совместимости типов (Закон Системы)
-ApprovedSignal = ApprovedSignalV2
+class GoogleSheetsRow(ApprovedSignal):
+    """Модель-наследник для совместимости с буферным слоем BufferedWriter. Полный проброс channel_id."""
+    pass
+
+
+class BatchAIResponse(BaseModel):
+    """Служебный контейнер для валидации пакетных ответов OpenAI API под Матрицу v1.2."""
+    signals: List[Any] = Field(default_factory=list)
+
+
+# Обратный легаси-алиас совместимости для сохранения внешних вызовов ядра
+ApprovedSignalV2 = ApprovedSignal
