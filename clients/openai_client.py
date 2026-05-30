@@ -3,8 +3,8 @@ KRAKEN OpenAI Client — AI-классификатор сигналов.
 
 Фаза 3: ИНТЕГРАЦИИ
 Модуль: 3.2 openai_client.py
-Версия: v5.4.0 (SRE 5.0 RUNTIME ADAPTER — CONCURRENCY SEMAPHORE FIXED)
-Дата/Время стабилизации: 2026-05-30 20:53:00 UTC
+Версия: v5.4.1 (SRE 5.0 RUNTIME ADAPTER — INLINE DATA OBSERVABILITY)
+Дата/Время стабилизации: 2026-05-30 21:05:00 UTC
 """
 
 import os
@@ -125,6 +125,11 @@ class OpenAIClient:
 
                 if isinstance(sig, dict):
                     sig["message_index"] = idx
+                    
+                    # ТОТАЛЬНЫЙ СКВОЗНОЙ ИНЛАЙН-ПРИНТ: Выводим вердикт ИИ до фильтрации движком
+                    sys.stdout.write(f"🔬 [AI INLINE]: msg_{idx} -> is_approved={sig.get('is_approved')} | price={sig.get('price')} | segment={sig.get('market_segment')}\n")
+                    sys.stdout.flush()
+                    
                     return sig
             except Exception as e:
                 sys.stdout.write(f"⚠️ [AI Client Connection Error]: {e}\n")
@@ -142,7 +147,6 @@ class OpenAIClient:
 
         log_sre(f"🧠 ИИ-Файрволл: Запуск СИНХРОНИЗИРОВАННОГО пула для {len(messages)} сообщений.")
 
-        # Ограничиваем поток до 5 параллельных слотов, чтобы не вешать TCP-таблицу Squid прокси
         sem = asyncio.Semaphore(5)
 
         tasks = [self._process_single_message_async(sem, idx, msg) for idx, msg in enumerate(messages)]
