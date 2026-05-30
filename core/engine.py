@@ -3,8 +3,8 @@ KRAKEN Engine — Центральный оркестратор сбора си�
 
 Фаза 4: ЯДЕРНЫЕ КОМПОНЕНТЫ
 Модуль: 4.3 engine.py
-Версия: v5.3.6 (SRE 5.0 CORE SYNCHRONIZED — ABSOLUTE DIRECT FLAT MASTER)
-Дата/Время стабилизации: 2026-05-30 19:10:00 UTC
+Версия: v5.3.7 (SRE 5.0 CORE SYNCHRONIZED — ABSOLUTE DIRECT FLAT MASTER — ENGINE AUTO-FLUSH)
+Дата/Время стабилизации: 2026-05-30 19:30:00 UTC
 """
 
 import sys
@@ -137,7 +137,7 @@ class Engine:
         approved = []
         if sanitized:
             try:
-                # Паспортный справочник для O(1) поиска метаданных нав
+                # Паспортный справочник для O(1) поиска метаданных каналов
                 channel_meta = {c.channel_id: c for c in channels}
                 
                 from clients.openai_client import OpenAIClient
@@ -217,7 +217,7 @@ class Engine:
         final_approved = approved
         stats["signals_approved"] = len(final_approved)
         
-        # 6. Запись в Google Sheets по плоской матрице
+        # 6. Запись в Google Sheets по плоской матрице с автоматическим выталкиванием
         if final_approved:
             await self._write_signals(final_approved)
         
@@ -247,9 +247,19 @@ class Engine:
             from core.storage_writer import StorageWriter
             if not hasattr(self, '_writer') or self._writer is None:
                 self._writer = StorageWriter(self._gsheets_client)
+            
+            # Принудительно заставляем внутренний буфер отдать строки в Google Sheets
             await self._writer.write_signals(signals)
-        except Exception:
-            pass
+            if hasattr(self._writer, 'flush'):
+                await self._writer.flush()
+            elif hasattr(self._writer, '_buffer') and hasattr(self._writer, 'flush_buffer'):
+                await self._writer.flush_buffer()
+                
+            sys.stdout.write(f"[{datetime.now().isoformat()}] 📊 [Engine Flush] Принудительно вытолкнули {len(signals)} записей в Sheets.\n")
+            sys.stdout.flush()
+        except Exception as e:
+            sys.stdout.write(f"[{datetime.now().isoformat()}] ⚠️ [Sheets Write Exception] {e}\n")
+            sys.stdout.flush()
     
     def get_stats(self) -> dict:
         return {
