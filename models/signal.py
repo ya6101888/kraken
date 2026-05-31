@@ -3,8 +3,8 @@ KRAKEN Data Models — ДНК структуры данных.
 
 Фаза 2: МОДЕЛИ ДАННЫХ
 Модуль: 2.1 signal.py
-Версия: v2.2.6 (SRE 5.0 CANONICAL — FIELD VALIDATION BOUNDS EXPANDED)
-Дата стабилизации: 2026-05-30 20:15:00 UTC
+Версия: v2.2.7 (SRE 5.0 CANONICAL — INTELLIGENT PRICE NORMALIZATION & AREA EXPANDED)
+Дата стабилизации: 2026-05-31 17:15:00 UTC
 """
 
 import re
@@ -122,10 +122,7 @@ class ApprovedSignal(BaseModel):
     channel_name: str = Field(min_length=1, max_length=200)
     message_id: int = Field(ge=1)
     market_segment: MarketSegment = Field(default=MarketSegment.SECONDARY)
-    
-    # ИСПРАВЛЕНО: Расширен диапазон ge=0.0 для предотвращения падения при сомнениях ИИ
     segment_confidence: float = Field(default=0.95, ge=0.00, le=1.00)
-    
     source_type: SourceType = Field(default=SourceType.AGENCY)
     source_tier: int = Field(default=3, ge=1, le=5)
     geo_focus: GeoFocus = Field(default=GeoFocus.ROSTOV_CITY)
@@ -135,7 +132,10 @@ class ApprovedSignal(BaseModel):
     price: Optional[float] = Field(default=None, ge=0)
     address: Optional[str] = Field(default=None, max_length=500)
     rooms: Optional[int] = Field(default=None, ge=0, le=10) # ge=0 разрешает студии!
-    area: Optional[float] = Field(default=None, ge=1.0, le=1000.0)
+    
+    # ИСПРАВЛЕНО: Расширен лимит до 10000.0 для загородных усадеб и участков ИЖС ЮФО
+    area: Optional[float] = Field(default=None, ge=1.0, le=10000.0)
+    
     floor: Optional[str] = Field(default=None, max_length=50)
     developer: Optional[str] = Field(default=None, max_length=200)
     completion_date: Optional[str] = Field(default=None)
@@ -144,10 +144,7 @@ class ApprovedSignal(BaseModel):
     # Текстовые контейнеры и логистика
     original_content: str = Field(max_length=10000)
     cleaned_content: str = Field(max_length=4000)
-    
-    # ИСПРАВЛЕНО: Расширен диапазон ge=0.0 для синхронизации со свободным промптом
     relevance_score: float = Field(default=0.85, ge=0.00, le=1.00)
-    
     collected_at: datetime = Field(default_factory=datetime.now)
     is_approved: bool = Field(default=True)
     wf06_used_at: Optional[datetime] = None
@@ -159,10 +156,22 @@ class ApprovedSignal(BaseModel):
             if not re.match(r'^\d{4}-\d{2}$', str(self.completion_date)):
                 self.completion_date = None
                 
-        # 2. Интеллектуальная нормализация цен риелторов (перевод дробных млн/тыс строго в рубли-инты)
+        # 2. ИНТЕЛЛЕКТУАЛЬНЫЙ СЛОЙ ВЫПРАВЛЕНИЯ ЦЕН SRE 5.0 (Защита аренды и коротких миллионов)
         if self.price and self.price > 0:
-            if self.price < 100_000:
-                self.price = self.price * 1000 if self.price > 10_000 else self.price * 1_000_000
+            if self.market_segment == MarketSegment.RENT:
+                # Аренда: защищаем от превращения тысяч в миллионы
+                if self.price < 1000:
+                    self.price *= 1000  # Например, если ИИ вернул "25" вместо "25000"
+            else:
+                # Продажа/Инвестиции (PRIMARY, SECONDARY, INVEST)
+                if self.price < 100_000:
+                    if self.price <= 10_000:
+                        # Кейсы риелторов: "4,6 млн" -> 4.6 -> 4600000 или "4200" -> 4200000
+                        self.price = self.price * 1_000_000 if self.price < 100 else self.price * 1000
+                    else:
+                        # Если цена между 10 000 и 100 000 на продажу — это аномалия, оставляем инт
+                        pass
+                        
             self.price = int(round(self.price))
 
         # 3. Расчет priority_score по канонической SRE-формуле ТЗ v2.1
