@@ -3,32 +3,24 @@ KRAKEN Telegram Client — Singleton-менеджер MTProto-соединени
 
 Фаза 3: ИНТЕГРАЦИИ
 Модуль: 3.1 telegram_client.py
-Версия: v5.2.3
+Версия: v5.4.0 (SRE 5.0 COMPLIANT — STEALTH READY)
 
 Принципы:
 - ОДИН клиент на всё приложение (Singleton)
 - Потокобезопасность через asyncio.Lock
-- Автоматический reconnect при обрыве
+- Конфигурация СТРОГО через core.config.settings (Закон Params V)
 - Уважение FloodWait от Telegram
 """
 
-import os
 import asyncio
 import sys
 from pathlib import Path
-from dotenv import load_dotenv
 from telethon import TelegramClient
 from telethon.errors import (
     FloodWaitError,
     AuthKeyInvalidError,
 )
-# Загрузка .env — только абсолютный путь, без fallback'ов
-env_path = Path("/app/secrets/.env")
-if env_path.exists():
-    load_dotenv(env_path, override=True)
-else:
-    print(f"⚠️ .env not found at {env_path}")
-
+from core.config import settings  # Золотой стандарт конфигурации
 
 
 class TelegramClientManager:
@@ -44,36 +36,34 @@ class TelegramClientManager:
     async def get_instance(cls) -> TelegramClient:
         async with cls._lock:
             if cls._instance is None:
-                session_path = os.getenv("KRAKEN_SESSION_PATH", "/app/sessions/kraken.session")
-                if session_path.startswith("/app/") and not Path("/app").exists():
-                    session_path = "/app" + session_path[4:]
-                
-                api_id = int(os.getenv("TG_API_ID", "0"))
-                api_hash = os.getenv("TG_API_HASH", "")
+                # Тянем строго валидированные параметры из Pydantic Settings
+                session_path = settings.KRAKEN_SESSION_PATH
+                api_id = settings.TG_API_ID
+                api_hash = settings.TG_API_HASH
                 
                 if not api_id or not api_hash:
                     raise ValueError(
                         "TG_API_ID или TG_API_HASH не заданы в .env! "
-                        "Проверь /app/secrets/.env"
+                        "Проверь /app/secrets/.env через настройки Pydantic."
                     )
                 
+                # Настройка прокси через единый источник правды
                 proxy = None
-                proxy_type = os.getenv("TG_PROXY_TYPE", "").lower()
-                proxy_ip = os.getenv("TG_PROXY_IP", "")
-                proxy_port = os.getenv("TG_PROXY_PORT", "")
-                
-                if proxy_type and proxy_ip and proxy_port:
+                if settings.PROXY_ENABLED and settings.PROXY_HTTP_URL:
+                    from urllib.parse import urlparse
+                    parsed_url = urlparse(settings.PROXY_HTTP_URL)
+                    
                     proxy = {
-                        'proxy_type': proxy_type,
-                        'addr': proxy_ip,
-                        'port': int(proxy_port),
+                        'proxy_type': settings.PROXY_TELETHON_TYPE.lower(),
+                        'addr': parsed_url.hostname,
+                        'port': parsed_url.port,
                     }
-                    proxy_user = os.getenv("TG_PROXY_USER", "")
-                    proxy_pass = os.getenv("TG_PROXY_PASS", "")
-                    if proxy_user:
-                        proxy['username'] = proxy_user
-                        proxy['password'] = proxy_pass
-                    print(f"🛡️ Proxy configured: {proxy_type}://{proxy_ip}:{proxy_port}")
+                    if parsed_url.username:
+                        proxy['username'] = parsed_url.username
+                        proxy['password'] = parsed_url.password
+                        
+                    sys.stdout.write(f"🛡️ Proxy configured via Settings: {proxy['proxy_type']}://{proxy['addr']}:{proxy['port']}\n")
+                    sys.stdout.flush()
                 
                 cls._instance = TelegramClient(
                     session=session_path,
@@ -84,9 +74,8 @@ class TelegramClientManager:
                     auto_reconnect=True,
                     timeout=30
                 )
-                print(f"🔑 TelegramClient singleton created")
-                print(f"   Session: {session_path}")
-                print(f"   API_ID: {api_id}")
+                sys.stdout.write(f"🔑 TelegramClient singleton created | Session: {session_path} | API_ID: {api_id}\n")
+                sys.stdout.flush()
             
             return cls._instance
     
@@ -95,21 +84,26 @@ class TelegramClientManager:
         client = await cls.get_instance()
         
         if cls._initialized:
-            print("✅ Client already initialized")
+            sys.stdout.write("✅ Client already initialized\n")
+            sys.stdout.flush()
             return client
         
-        print("🔄 Connecting to Telegram...")
+        sys.stdout.write("🔄 Connecting to Telegram...\n")
+        sys.stdout.flush()
         await client.connect()
         
         if not await client.is_user_authorized():
-            phone = os.getenv("TG_PHONE_NUMBER", "")
-            password = os.getenv("TG_2FA_PASSWORD", "")
-            print(f"📱 Starting new session for {phone}")
+            phone = settings.TG_PHONE_NUMBER
+            password = settings.TG_2FA_PASSWORD
+            sys.stdout.write(f"📱 Starting new session for {phone}\n")
+            sys.stdout.flush()
             await client.start(phone=phone, password=password or None)
-            print("✅ New session created and authorized")
+            sys.stdout.write("✅ New session created and authorized\n")
+            sys.stdout.flush()
         else:
             me = await client.get_me()
-            print(f"✅ Session loaded: @{me.username or me.first_name}")
+            sys.stdout.write(f"✅ Session loaded: @{me.username or me.first_name}\n")
+            sys.stdout.flush()
         
         cls._initialized = True
         return client
@@ -117,33 +111,41 @@ class TelegramClientManager:
     @classmethod
     async def disconnect(cls):
         if cls._instance and cls._initialized:
-            print("🛑 Disconnecting from Telegram...")
+            sys.stdout.write("🛑 Disconnecting from Telegram...\n")
+            sys.stdout.flush()
             await cls._instance.disconnect()
             cls._initialized = False
-            print("✅ Disconnected")
+            sys.stdout.write("✅ Disconnected\n")
+            sys.stdout.flush()
     
     @classmethod
     async def reconnect(cls) -> bool:
         if not cls._instance:
-            print("❌ Cannot reconnect: no instance")
+            sys.stdout.write("❌ Cannot reconnect: no instance\n")
+            sys.stdout.flush()
             return False
         
         try:
-            print("🔄 Reconnecting...")
+            sys.stdout.write("🔄 Reconnecting...\n")
+            sys.stdout.flush()
             await cls._instance.connect()
             
             if await cls._instance.is_user_authorized():
-                print("✅ Reconnected successfully")
+                sys.stdout.write("✅ Reconnected successfully\n")
+                sys.stdout.flush()
                 cls._initialized = True
                 return True
             else:
-                print("❌ Reconnect failed: not authorized")
+                sys.stdout.write("❌ Reconnect failed: not authorized\n")
+                sys.stdout.flush()
                 return False
         except AuthKeyInvalidError:
-            print("💀 FATAL: AuthKey invalid — session is dead")
+            sys.stdout.write("💀 FATAL: AuthKey invalid — session is dead\n")
+            sys.stdout.flush()
             return False
         except Exception as e:
-            print(f"❌ Reconnect error: {e}")
+            sys.stdout.write(f"❌ Reconnect error: {e}\n")
+            sys.stdout.flush()
             return False
     
     # ===== 3.1.4. HEARTBEAT =====
@@ -152,42 +154,51 @@ class TelegramClientManager:
     async def heartbeat_loop(cls, stop_event: asyncio.Event = None):
         consecutive_failures = 0
         max_failures = 3
-        print("💓 Heartbeat loop started (every 300s)")
+        sys.stdout.write("💓 Heartbeat loop started (every 300s)\n")
+        sys.stdout.flush()
         while True:
             if stop_event and stop_event.is_set():
-                print("💓 Heartbeat stopped")
+                sys.stdout.write("💓 Heartbeat stopped\n")
+                sys.stdout.flush()
                 break
-            await asyncio.sleep(300)
+            await asyncio.sleep(settings.KRAKEN_HEARTBEAT_INTERVAL_SECONDS)
             try:
                 client = await cls.get_instance()
                 if not client.is_connected():
                     raise ConnectionError("Not connected")
                 me = await client.get_me()
                 consecutive_failures = 0
-                print(f"💓 Heartbeat OK: user_id={me.id}")
+                sys.stdout.write(f"💓 Heartbeat OK: user_id={me.id}\n")
+                sys.stdout.flush()
             except Exception as e:
                 consecutive_failures += 1
-                print(f"⚠️ Heartbeat failed ({consecutive_failures}/{max_failures}): {e}")
+                sys.stdout.write(f"⚠️ Heartbeat failed ({consecutive_failures}/{max_failures}): {e}\n")
+                sys.stdout.flush()
                 if consecutive_failures >= max_failures:
-                    print("🔄 Starting auto-reconnect...")
+                    sys.stdout.write("🔄 Starting auto-reconnect...\n")
+                    sys.stdout.flush()
                     success = await cls.reconnect()
                     if success:
                         consecutive_failures = 0
                     else:
-                        print("❌ Reconnect failed, will retry next heartbeat")
+                        sys.stdout.write("❌ Reconnect failed, will retry next heartbeat\n")
+                        sys.stdout.flush()
                         consecutive_failures = 0
     
     # ===== 3.1.5. GET MESSAGES FAST =====
-    
+
     @staticmethod
-    async def get_messages_fast(client: TelegramClient, channel_id: str, limit: int = 50, offset_id: int = None):
+    async def get_messages_fast(client: TelegramClient, channel_id: str, limit: int = 10, min_id: int = 0):
         try:
-            messages = await client.get_messages(channel_id, limit=limit, offset_id=offset_id)
+            # Курсор движется строго вперед от min_id по ТЗ Stealth Mode
+            messages = await client.get_messages(channel_id, limit=limit, min_id=min_id)
             return messages
+            
         except FloodWaitError as e:
             raise e
         except Exception as e:
-            print(f"❌ Error fetching from {channel_id}: {e}")
+            sys.stdout.write(f"❌ Error fetching from {channel_id}: {e}\n")
+            sys.stdout.flush()
             return []
     
     # ===== 3.1.6. FLOODWAIT HANDLER =====
@@ -198,15 +209,17 @@ class TelegramClientManager:
         wait_seconds = error.seconds
         jitter = random.uniform(0, wait_seconds * 0.3)
         delay = wait_seconds + jitter
-        print(f"🌊 FloodWait: Telegram says wait {wait_seconds}s, waiting {delay:.1f}s (with jitter)")
+        sys.stdout.write(f"🌊 FloodWait: Telegram says wait {wait_seconds}s, waiting {delay:.1f}s (with jitter)\n")
+        sys.stdout.flush()
         await asyncio.sleep(delay)
-        return wait_seconds > 30
+        return wait_seconds > settings.TG_FLOODWAIT_MAX_WAIT_SECONDS
     
     # ===== 3.1.8. AUTH REVOKED HANDLER =====
     
     @staticmethod
     async def handle_auth_revoked():
-        print("💀 FATAL: Session dead (AuthKeyInvalid)")
+        sys.stdout.write("💀 FATAL: Session dead (AuthKeyInvalid)\n")
+        sys.stdout.flush()
         try:
             from clients.bot_client import BotClient
             bot = BotClient()
@@ -216,8 +229,10 @@ class TelegramClientManager:
                 message="Session revoked, need manual bootstrap."
             )
         except Exception as e:
-            print(f"⚠️ Could not send Beacon alert: {e}")
-        print("🛑 Exiting with code 1")
+            sys.stdout.write(f"⚠️ Could not send Beacon alert: {e}\n")
+            sys.stdout.flush()
+        sys.stdout.write("🛑 Exiting with code 1\n")
+        sys.stdout.flush()
         sys.exit(1)
 
 
@@ -234,7 +249,8 @@ class TelegramLifespan:
         self._stop_event: asyncio.Event = asyncio.Event()
     
     async def __aenter__(self) -> TelegramClient:
-        print("🚀 TelegramLifespan STARTUP")
+        sys.stdout.write("🚀 TelegramLifespan STARTUP\n")
+        sys.stdout.flush()
         self.client = await TelegramClientManager.init_client()
         self._heartbeat_task = asyncio.create_task(
             TelegramClientManager.heartbeat_loop(self._stop_event)
@@ -242,7 +258,8 @@ class TelegramLifespan:
         return self.client
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        print("🛑 TelegramLifespan SHUTDOWN")
+        sys.stdout.write("🛑 TelegramLifespan SHUTDOWN\n")
+        sys.stdout.flush()
         self._stop_event.set()
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
@@ -251,4 +268,5 @@ class TelegramLifespan:
             except asyncio.CancelledError:
                 pass
         await TelegramClientManager.disconnect()
-        print("✅ TelegramLifespan SHUTDOWN complete")
+        sys.stdout.write("✅ TelegramLifespan SHUTDOWN complete\n")
+        sys.stdout.flush()

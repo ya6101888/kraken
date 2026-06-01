@@ -3,8 +3,8 @@ KRAKEN Engine — Центральный оркестратор сбора си�
 
 Фаза 4: ЯДЕРНЫЕ КОМПОНЕНТЫ
 Модуль: 4.3 engine.py
-Версия: v5.3.8 (SRE 5.0 CORE SYNCHRONIZED — RAW observado — AUTOMATIC FLUSH)
-Дата/Время стабилизации: 2026-05-30 20:30:00 UTC
+Версия: v5.4.0 (SRE 5.0 CORE STEALTH — REVERSE CURSOR — AUTOMATIC FLUSH)
+Дата/Время стабилизации: 2026-06-01 17:00:00 UTC
 """
 
 import sys
@@ -57,24 +57,36 @@ class Engine:
         return self._channel_manager.get_channels_for_cycle(cycle_counter)
     
     async def fetch_all_messages(self, channels: List, trace_id: str) -> List[RawMessageWithTrace]:
+        import random
+        import asyncio
         from clients.telegram_client import TelegramClientManager
+        from core.config import settings  # Гарантируем подгрузку золотого конфига
+        
         client = await TelegramClientManager.get_instance()
         all_messages: List[RawMessageWithTrace] = []
         
         for channel in channels:
             channel_id = channel.channel_id
-            offset_id = self.last_processed.get(channel_id, 0)
+            
+            # Разворачиваем курсор: берем последний зафиксированный ID как нижний барьер
+            min_id = self.last_processed.get(channel_id, 0)
             
             try:
+                # Тянем параметры строго из Params (V) Stealth Mode
                 messages = await TelegramClientManager.get_messages_fast(
                     client=client,
                     channel_id=channel_id,
-                    limit=50,
-                    offset_id=offset_id
+                    limit=settings.TG_MESSAGE_LIMIT,
+                    min_id=min_id  # Заменили offset_id на min_id! Читаем только СВЕЖЕЕ
                 )
                 
                 if messages:
-                    self.last_processed[channel_id] = messages[0].id
+                    # Сортируем по ID, чтобы гарантировать, что под индексом [0] будет САМЫЙ СВЕЖИЙ пост
+                    messages.sort(key=lambda m: m.id, reverse=True)
+                    
+                    # Фиксируем верхнюю точку для следующего раунда, только если новый ID больше старого
+                    if messages[0].id > min_id:
+                        self.last_processed[channel_id] = messages[0].id
                     
                     for msg in messages:
                         try:
@@ -93,11 +105,18 @@ class Engine:
                         except Exception:
                             pass
                 
+                # Защитный экран Anti-Flood Shield: рваный ритм между каналами
+                delay = random.uniform(settings.TG_CHANNEL_DELAY_MIN, settings.TG_CHANNEL_DELAY_MAX)
+                await asyncio.sleep(delay)
+                
             except Exception as e:
                 if "FloodWait" in type(e).__name__:
+                    sys.stdout.write(f"[{datetime.now().isoformat()}] 🌊 КРИТИЧЕСКИЙ FLOODWAIT: Прерываем раунд сбора.\n")
+                    sys.stdout.flush()
                     break
         
-        sys.stdout.write(f"[{datetime.now().isoformat()}] 📩 Collected {len(all_messages)} messages from {len(channels)} channels\n")
+        # Добавляем в логирование обсервацию крайнего ID для контроля сдвига
+        sys.stdout.write(f"[{datetime.now().isoformat()}] 📩 Collected {len(all_messages)} СВЕЖИХ сообщений с лимитом окно={settings.TG_MESSAGE_LIMIT}\n")
         sys.stdout.flush()
         return all_messages
     
@@ -120,6 +139,7 @@ class Engine:
         if not channels:
             return stats
             
+        messages = []  # Защита от UnboundLocalError
         try:
             messages = await self.fetch_all_messages(channels, trace_id)
         except Exception as e:

@@ -64,13 +64,20 @@ class Settings(BaseSettings):
     GSHEETS_BUFFER_SIZE: int = 100
     GSHEETS_DLQ_PATH: str = "/app/dlq/failed_writes.json"
     
-    # ===== 📡 TELEGRAM MTPROTO APP INTERFACES =====
+
+
+# ===== 📡 TELEGRAM MTPROTO APP INTERFACES =====
     TG_API_ID: int = 0
     TG_API_HASH: str = ""
     TG_PHONE_NUMBER: str = ""
     TG_2FA_PASSWORD: Optional[str] = None
     TG_FLOODWAIT_MAX_WAIT_SECONDS: int = 30
     
+    # --- Внедрение параметров Stealth-режима (SRE v2.3) ---
+    TG_MESSAGE_LIMIT: int = 10
+    TG_CHANNEL_DELAY_MIN: float = 2.0
+    TG_CHANNEL_DELAY_MAX: float = 5.0
+
     # ===== 🚨 MONITORING SRE BEACON MONITOR =====
     BEACON_ENABLED: bool = True
     BEACON_BOT_TOKEN: str = ""
