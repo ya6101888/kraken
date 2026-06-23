@@ -1,9 +1,8 @@
 """
 KRAKEN Configuration — Все параметры из .env через Pydantic Settings.
-
 Фаза 5: ОРКЕСТРАЦИЯ
 Модуль: config.py
-Версия: v5.2.3 (v1.2 GOLDEN CONFIG)
+Версия: v5.3.4 (SRE 5.0 GOLDEN CONFIG — UNIFIED PROXY LAYER)
 """
 
 import sys
@@ -11,21 +10,19 @@ from pathlib import Path
 from typing import Optional
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 class Settings(BaseSettings):
     """
-    Централизованные настройки KRAKEN по стандарту v1.2.
-    
-    Все параметры строго типизированы и считываются из secrets/.env.
-    Использование:
-        from core.config import settings
-        print(settings.TG_API_ID)
+    Централизованные настройки KRAKEN.
+    Внедрен единый сетевой слой для всех библиотек.
     """
     
     # ===== 🖥️ NETWORK PROXY (Squid Tunneling) =====
     PROXY_ENABLED: bool = True
     PROXY_HTTP_URL: str = "http://192.168.0.1:3128"
     PROXY_TELETHON_TYPE: str = "http"
+    # Единый транспортный уровень для всех HTTP-клиентов
+    HTTP_PROXY: str = "http://192.168.0.1:3128"
+    HTTPS_PROXY: str = "http://192.168.0.1:3128"
     
     # ===== 🦑 KRAKEN CORE ORCHESTRATION =====
     KRAKEN_CRON_INTERVAL_MINUTES: int = 15
@@ -46,10 +43,10 @@ class Settings(BaseSettings):
     HARVESTER_REGEX_REMOVE_HTML: bool = True
     HARVESTER_REGEX_REMOVE_EMOJI: bool = False
     
-    # ===== 🧠 AI FIREWALL EXPERT SYSTEM (v1.2 Schema) =====
+    # ===== 🧠 AI FIREWALL EXPERT SYSTEM =====
     OPENAI_API_KEY: Optional[str] = None
     AI_MODEL_NAME: str = "gpt-4o-mini"
-    AI_TEMPERATURE: float = 0.0  # Strict ноль для защиты от галлюцинаций
+    AI_TEMPERATURE: float = 0.0
     AI_MAX_TOKENS: int = 1000
     AI_REQUEST_TIMEOUT_SECONDS: int = 30
     AI_RELEVANCE_THRESHOLD: float = 0.7
@@ -64,16 +61,12 @@ class Settings(BaseSettings):
     GSHEETS_BUFFER_SIZE: int = 100
     GSHEETS_DLQ_PATH: str = "/app/dlq/failed_writes.json"
     
-
-
-# ===== 📡 TELEGRAM MTPROTO APP INTERFACES =====
+    # ===== 📡 TELEGRAM MTPROTO APP INTERFACES =====
     TG_API_ID: int = 0
     TG_API_HASH: str = ""
     TG_PHONE_NUMBER: str = ""
     TG_2FA_PASSWORD: Optional[str] = None
     TG_FLOODWAIT_MAX_WAIT_SECONDS: int = 30
-    
-    # --- Внедрение параметров Stealth-режима (SRE v2.3) ---
     TG_MESSAGE_LIMIT: int = 10
     TG_CHANNEL_DELAY_MIN: float = 2.0
     TG_CHANNEL_DELAY_MAX: float = 5.0
@@ -84,29 +77,4 @@ class Settings(BaseSettings):
     BEACON_CHAT_ID: str = ""
     BEACON_RATE_LIMIT_PER_ERROR_MINUTES: int = 5
     BEACON_HEALTH_CHECK_INTERVAL_SECONDS: int = 30
-    BEACON_LOCAL_LOG_PATH: str = "/app/logs/alerts.log"
-    
-    # ===== 🏗️ INFRASTRUCTURE LAYER =====
-    INFRA_LOG_LEVEL: str = "INFO"
-    INFRA_ENVIRONMENT: str = "production"
-    PYTHONUNBUFFERED: int = 1
-
-    # Валидация Pydantic v2 через современный конфигуратор
-    model_config = SettingsConfigDict(
-        env_file="/app/secrets/.env",
-        env_file_encoding="utf-8",
-        case_sensitive=True,
-        extra="ignore"
-    )
-
-
-# --- СТЕРИЛЬНАЯ ИНИЦИАЛИЗАЦИЯ И ПОДГРУЗКА ИЗ CONTAINER VOLUME ---
-_env_path = Path(Settings.model_config.get("env_file", "/app/secrets/.env"))
-
-if _env_path.exists():
-    settings = Settings()
-    # Мгновенный сброс в stdout без буферизации
-    print(f"✅ [SRE-CONFIG] .env loaded from {_env_path}. Env: {settings.INFRA_ENVIRONMENT}", file=sys.stdout)
-else:
-    print(f"⚠️ [КРИТИЧЕСКИЙ СБОЙ CONFIG] .env не найден по пути {_env_path}! Рантайм остановлен.", file=sys.stderr)
-    sys.exit(1)
+    BEACON

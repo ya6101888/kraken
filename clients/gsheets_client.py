@@ -3,16 +3,16 @@ KRAKEN Google Sheets Client — Запись сигналов в таблицы.
 
 Фаза 3: ИНТЕГРАЦИИ
 Модуль: 3.3 gsheets_client.py
-Версия: v5.3.2 (GOLDEN SRE 5.0 Edition v2.1 — 25 COLUMNS FIXED)
-Дата изменения: 2026-05-30 17:02:00
+Версия: v5.4.1 (SRE 5.0 GOLDEN EDITION — UNIFIED PROXY LAYER INJECTED)
+Дата изменения: 2026-06-23 18:05:00 UTC
 
 Принципы:
 - Авторизация через service_account.json
-- Динамический размер буфера из core.config.settings (GSHEETS_BUFFER_SIZE)
+- Тотальная маршрутизация через SRE Proxy (HTTP_PROXY/HTTPS_PROXY)
+- Динамический размер буфера из core.config.settings
 - Retry: 3 попытки с exponential backoff
-- Прямой транзит канонического DTO v2.1 (25 колонок) без повторного маппинга
+- Прямой транзит канонического DTO v2.1 (25 колонок)
 - DLQ: сохранение неудавшихся записей в JSON
-- Health-check: тестовая запись при старте
 - Тотальная наблюдаемость: вывод критических SRE-логов напрямую в stdout хоста
 """
 
@@ -60,7 +60,16 @@ class GoogleSheetsClient:
     # ===== 3.3.1. АВТОРИЗАЦИЯ =====
     
     def _init_client(self):
-        """Авторизуется через сервисный аккаунт Google."""
+        """Авторизуется через сервисный аккаунт Google с инъекцией прокси-слоя."""
+        from core.config import settings
+        
+        # Инъекция прокси для всех HTTP-библиотек (requests/gspread)
+        if settings.PROXY_ENABLED:
+            os.environ['HTTP_PROXY'] = settings.HTTP_PROXY
+            os.environ['HTTPS_PROXY'] = settings.HTTPS_PROXY
+            sys.stdout.write(f"🛡️ [SRE-NETWORK] Proxy tunnel injected: {settings.HTTP_PROXY}\n")
+            sys.stdout.flush()
+
         try:
             import gspread
             from oauth2client.service_account import ServiceAccountCredentials
