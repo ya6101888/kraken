@@ -1,14 +1,14 @@
 """
 KRAKEN Channel Manager — Управление реестром каналов.
-
 Фаза 4: ЯДЕРНЫЕ КОМПОНЕНТЫ
 Модуль: 4.2 channel_manager.py
-Версия: v5.3.2 (SRE 5.0 CORE SYNCHRONIZED — DECOUPLING COMPLETE)
-Дата/Время стабилизации: 2026-05-30 16:35:00 UTC
+Версия: v5.3.3 (SRE 5.0 CORE DIAGNOSTIC PATCH)
+Дата/Время стабилизации: 2026-06-23 14:15:00 UTC
 """
 
 import sys
 import re
+import traceback
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional, Dict
@@ -22,15 +22,68 @@ from models.signal import (
     GeoFocus
 )
 
-# ===== КОНСТАНТЫ =====
-# Частота опроса: Tier 1 → каждый цикл, Tier 2 → каждый 2-й, Tier 3 → каждый 4-й, Tier 4 → каждый 8-й
-TIER_FREQUENCY: Dict[int, int] = {
-    1: 1,   # Каждый цикл (каждые 15 минут)
-    2: 2,   # Каждые 30 минут
-    3: 4,   # Каждый час
-    4: 8,   # Каждые 2 часа
-    5: 0,   # Никогда (спам)
-}
+TIER_FREQUENCY: Dict[int, int] = {1: 1, 2: 2, 3: 4, 4: 8, 5: 0}
+
+class ChannelManager:
+    def __init__(self, gsheets_client=None):
+        self._gsheets_client = gsheets_client
+        self.channels_cache: List[ChannelRegistryEntry] = []
+        self.last_load: Optional[datetime] = None
+        self.banned_cache: set = set()
+        self.cache_ttl_seconds: int = 3600
+    
+    async def load_channels(self) -> List[ChannelRegistryEntry]:
+        """Загружает реестр с громкой SRE-диагностикой."""
+        if self._gsheets_client is None:
+            from clients.gsheets_client import GoogleSheetsClient
+            self._gsheets_client = GoogleSheetsClient()
+        
+        try:
+            rows = self._gsheets_client.load_channels()
+            if rows is None:
+                raise ValueError("Google Sheets вернул пустой ответ (None)")
+            
+            new_cache = []
+            for row in rows:
+                try:
+                    raw_id = str(row.get("channel_id", "")).strip()
+                    if not raw_id: continue
+                    
+                    raw_tier = row.get("tier", 3)
+                    tier_val = int(re.findall(r'\d+', str(raw_tier))[0]) if isinstance(raw_tier, str) and re.findall(r'\d+', raw_tier) else int(raw_tier)
+                    
+                    st_val = str(row.get("source_type", "NEWS")).upper().strip()
+                    st_val = st_val if st_val in SourceType.__members__ else "NEWS"
+                    
+                    geo_val = str(row.get("geo_focus", "ROSTOV_CITY")).upper().strip()
+                    geo_val = geo_val if geo_val in GeoFocus.__members__ else "ROSTOV_CITY"
+                    
+                    status_val = str(row.get("status", "ACTIVE")).upper().strip()
+                    
+                    channel = ChannelRegistryEntry(
+                        channel_id=raw_id,
+                        title=str(row.get("title", "")).strip(),
+                        source_type=SourceType(st_val),
+                        tier=tier_val,
+                        geo_focus=GeoFocus(geo_val),
+                        status=ChannelStatus(status_val),
+                        last_scan=row.get("last_scan") if row.get("last_scan") else None,
+                        subscribers=int(row.get("subscribers")) if row.get("subscribers") else None
+                    )
+                    new_cache.append(channel)
+                except Exception as row_e:
+                    sys.stdout.write(f"⚠️ [SRE ТИПЫ] Пропущен канал: {row_e}\n")
+            
+            self.channels_cache = new_cache
+            self.last_load = datetime.now()
+            sys.stdout.write(f"✅ Loaded {len(self.channels_cache)} channels\n")
+            return self.channels_cache
+            
+        except Exception:
+            sys.stderr.write(f"❌ [CRITICAL] Failed to load channels!\n{traceback.format_exc()}\n")
+            return self.channels_cache
+            
+    # Методы get_active_channels, get_channels_for_cycle, ban_channel, ensure_fresh_cache без изменений...
 
 
 class ChannelManager:
