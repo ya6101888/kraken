@@ -79,6 +79,11 @@ class Settings(BaseSettings):
     BEACON_RATE_LIMIT_PER_ERROR_MINUTES: int = 5
     BEACON_HEALTH_CHECK_INTERVAL_SECONDS: int = 30
 
+    # ===== 🎯 INFRASTRUCTURE (ДОБАВЛЕНО!) =====
+    INFRA_ENVIRONMENT: str = "production"
+    INFRA_LOG_LEVEL: str = "INFO"
+    INFRA_TRACE_ID_ENABLED: bool = True
+
     # ===== 🎛️ CONFIGURATION INTEGRITY (SRE 5.0) =====
     model_config = SettingsConfigDict(
         env_file="/app/secrets/.env",
