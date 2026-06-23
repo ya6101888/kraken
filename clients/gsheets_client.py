@@ -3,8 +3,8 @@ KRAKEN Google Sheets Client — Запись сигналов в таблицы.
 
 Фаза 3: ИНТЕГРАЦИИ
 Модуль: 3.3 gsheets_client.py
-Версия: v5.4.3 (SRE 5.0 GOLDEN EDITION — FIXED CHANNEL FILTER)
-Дата изменения: 2026-06-23 19:15:00 UTC
+Версия: v5.4.4 (SRE 5.0 GOLDEN EDITION — DIAGNOSTIC MODE)
+Дата изменения: 2026-06-23 19:40:00 UTC
 
 Принципы:
 - Авторизация через service_account.json
@@ -15,7 +15,7 @@ KRAKEN Google Sheets Client — Запись сигналов в таблицы.
 - Прямой транзит канонического DTO v2.1 (25 колонок)
 - DLQ: сохранение неудавшихся записей в JSON
 - Тотальная наблюдаемость: вывод критических SRE-логов напрямую в stdout хоста
-- FIX: фильтр каналов теперь регистронезависимый (учитывает пробелы и регистр)
+- DIAGNOSTIC: пошаговый вывод для отладки загрузки каналов
 """
 
 import os
@@ -126,29 +126,46 @@ class GoogleSheetsClient:
         """Доступен ли Google Sheets API."""
         return self.client is not None
     
-    # ===== 3.3.2. ЗАГРУЗКА КАНАЛОВ (FIXED FILTER) =====
+    # ===== 3.3.2. ЗАГРУЗКА КАНАЛОВ (DIAGNOSTIC MODE) =====
     
     def load_channels(self) -> List[Dict]:
         """Загружает реестр каналов из листа tg_channels."""
+        print("🔍 [DIAGNOSTIC] load_channels() START")
+        
         if not self.is_available:
+            print("⚠️ Google Sheets client not available")
             return []
         
         try:
+            print(f"🔍 [DIAGNOSTIC] Opening spreadsheet: {self.spreadsheet_id}")
             sheet = self.client.open_by_key(self.spreadsheet_id)
-            worksheet = sheet.worksheet("tg_channels")
-            rows = worksheet.get_all_records()
+            print("✅ [DIAGNOSTIC] Spreadsheet opened successfully")
             
-            # FIX: регистронезависимый фильтр с учётом пробелов
+            print("🔍 [DIAGNOSTIC] Getting worksheet: tg_channels")
+            worksheet = sheet.worksheet("tg_channels")
+            print("✅ [DIAGNOSTIC] Worksheet obtained")
+            
+            print("🔍 [DIAGNOSTIC] Fetching all records...")
+            rows = worksheet.get_all_records()
+            print(f"✅ [DIAGNOSTIC] Got {len(rows)} rows from sheet")
+            
+            print(f"🔍 [DIAGNOSTIC] Filtering status='ACTIVE'...")
             active = [
                 row for row in rows 
                 if str(row.get("status", "")).strip().upper() == "ACTIVE"
             ]
             
-            print(f"📡 Loaded {len(active)} active channels (from {len(rows)} total)")
+            print(f"📡 [DIAGNOSTIC] Loaded {len(active)} active channels (from {len(rows)} total)")
+            
+            if active:
+                print(f"📡 [DIAGNOSTIC] First channel: {active[0].get('channel_id')}")
+            
             return active
             
         except Exception as e:
-            print(f"❌ Failed to load channels: {e}")
+            import traceback
+            print(f"❌ [DIAGNOSTIC] Failed to load channels: {e}")
+            traceback.print_exc()
             return []
     
     # ===== 3.3.3. BATCH ЗАПИСЬ СИГНАЛОВ (СТРОГО 25 КОЛОНОК) =====
