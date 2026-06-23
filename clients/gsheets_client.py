@@ -3,8 +3,8 @@ KRAKEN Google Sheets Client — Запись сигналов в таблицы.
 
 Фаза 3: ИНТЕГРАЦИИ
 Модуль: 3.3 gsheets_client.py
-Версия: v5.4.2 (SRE 5.0 GOLDEN EDITION — EXPLICIT PROXY SESSION)
-Дата изменения: 2026-06-23 18:30:00 UTC
+Версия: v5.4.3 (SRE 5.0 GOLDEN EDITION — FIXED CHANNEL FILTER)
+Дата изменения: 2026-06-23 19:15:00 UTC
 
 Принципы:
 - Авторизация через service_account.json
@@ -15,6 +15,7 @@ KRAKEN Google Sheets Client — Запись сигналов в таблицы.
 - Прямой транзит канонического DTO v2.1 (25 колонок)
 - DLQ: сохранение неудавшихся записей в JSON
 - Тотальная наблюдаемость: вывод критических SRE-логов напрямую в stdout хоста
+- FIX: фильтр каналов теперь регистронезависимый (учитывает пробелы и регистр)
 """
 
 import os
@@ -125,7 +126,7 @@ class GoogleSheetsClient:
         """Доступен ли Google Sheets API."""
         return self.client is not None
     
-    # ===== 3.3.2. ЗАГРУЗКА КАНАЛОВ =====
+    # ===== 3.3.2. ЗАГРУЗКА КАНАЛОВ (FIXED FILTER) =====
     
     def load_channels(self) -> List[Dict]:
         """Загружает реестр каналов из листа tg_channels."""
@@ -137,7 +138,12 @@ class GoogleSheetsClient:
             worksheet = sheet.worksheet("tg_channels")
             rows = worksheet.get_all_records()
             
-            active = [row for row in rows if row.get("status") == "ACTIVE"]
+            # FIX: регистронезависимый фильтр с учётом пробелов
+            active = [
+                row for row in rows 
+                if str(row.get("status", "")).strip().upper() == "ACTIVE"
+            ]
+            
             print(f"📡 Loaded {len(active)} active channels (from {len(rows)} total)")
             return active
             
