@@ -3,8 +3,8 @@ KRAKEN Google Sheets Client — Запись сигналов в таблицы.
 
 Фаза 3: ИНТЕГРАЦИИ
 Модуль: 3.3 gsheets_client.py
-Версия: v5.4.4 (SRE 5.0 GOLDEN EDITION — DIAGNOSTIC MODE)
-Дата изменения: 2026-06-23 19:40:00 UTC
+Версия: v5.4.5 (SRE 5.0 GOLDEN EDITION — FINAL DIAGNOSTIC)
+Дата изменения: 2026-06-23 20:00:00 UTC
 
 Принципы:
 - Авторизация через service_account.json
@@ -82,7 +82,7 @@ class GoogleSheetsClient:
             if settings and settings.PROXY_ENABLED:
                 proxy_url = settings.HTTP_PROXY or settings.HTTPS_PROXY
                 if proxy_url:
-                    # Создаём сессию с прокси
+                    # Создаем сессию с прокси
                     session = requests.Session()
                     session.proxies = {
                         "http": proxy_url,
@@ -111,7 +111,7 @@ class GoogleSheetsClient:
                 scope
             )
             
-            # Передаём сессию в authorize
+            # Передаем сессию в authorize
             self.client = gspread.authorize(creds, session=session)
             print(f"✅ Google Sheets authorized with explicit proxy session")
             
@@ -126,7 +126,7 @@ class GoogleSheetsClient:
         """Доступен ли Google Sheets API."""
         return self.client is not None
     
-    # ===== 3.3.2. ЗАГРУЗКА КАНАЛОВ (DIAGNOSTIC MODE) =====
+    # ===== 3.3.2. ЗАГРУЗКА КАНАЛОВ (FINAL DIAGNOSTIC) =====
     
     def load_channels(self) -> List[Dict]:
         """Загружает реестр каналов из листа tg_channels."""
