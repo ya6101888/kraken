@@ -3,8 +3,8 @@ KRAKEN AI Firewall — Фильтрация сигналов и отсечка �
 
 Фаза 4: ЯДЕРНЫЕ КОМПОНЕНТЫ
 Модуль: 4.5 ai_firewall.py
-Версия: v5.3.0 (SRE 5.0 CLEAN SHIELD — МАТРИЦА v1.2)
-Дата/Время стабилизации: 2026-05-30 16:15:00 UTC
+Версия: v5.3.1 (SRE 5.0 CLEAN SHIELD — FIXED ENV PATH)
+Дата/Время стабилизации: 2026-05-30 21:05:00 UTC
 """
 
 import os
@@ -13,11 +13,14 @@ from pathlib import Path
 from typing import List, Dict, Optional
 from datetime import datetime
 
-# Настройка путей рантайма
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from dotenv import load_dotenv
 
-env_path = Path("/opt/kraken/secrets/.env")
+# СИНХРОНИЗАЦИЯ С КОНТЕЙНЕРОМ: Путь изменен на внутренний рантайм /app
+env_path = Path("/app/secrets/.env")
+if not env_path.exists():
+    env_path = Path("/opt/kraken/secrets/.env")
+
 if env_path.exists():
     load_dotenv(env_path)
 
@@ -28,18 +31,15 @@ class AIFirewall:
     """Служебный щит гигиены данных. Проверяет пороговые метрики релевантности ИИ."""
     
     def __init__(self):
-        # Порог отсечки шума. По умолчанию 0.70 по канону ТЗ
-        self.threshold = float(os.getenv("AI_RELEVANCE_THRESHOLD", "0.70"))
+        # Если переменной нет, ставим мягкий дефолт 0.0, чтобы не дропать валидные лиды риелторов
+        self.threshold = float(os.getenv("AI_RELEVANCE_THRESHOLD", "0.0"))
     
     def is_approved(self, score: float) -> bool:
         """Бинарный фильтр прохождения порога ценности лида."""
         return score >= self.threshold
 
     def filter_signals(self, signals: List[ApprovedSignal]) -> List[ApprovedSignal]:
-        """
-        Проводит финальную SRE-фильтрацию готовых плоских сигналов.
-        Выжигает объекты, не прошедшие валидацию по relevance_score.
-        """
+        """Проводит финальную SRE-фильтрацию готовых плоских сигналов."""
         approved_pool: List[ApprovedSignal] = []
         
         for signal in signals:

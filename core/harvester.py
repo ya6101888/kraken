@@ -3,15 +3,8 @@ KRAKEN Harvester — Очистка, дедупликация и фильтра�
 
 Фаза 4: ЯДЕРНЫЕ КОМПОНЕНТЫ
 Модуль: 4.4 harvester.py
-Версия: v5.2.3 (GOLDEN ASSEMBLY SRE 5.0 Canon)
-Дата/Время стабилизации: 2026-05-29 19:10:00 UTC
-
-Принципы:
-- SHA-256 дедупликация (Ленивое легитимное коммичевание хэшей)
-- FIFO-ограничение на 10 000 хешей на диске хоста
-- Regex-очистка: HTML, ссылки, лишние пробелы через RegexSanitizer
-- Расширенное окно фильтра даты: до 72 часов (Защита от слепого дропа)
-- Потоковое логирование SRE 5.0 без Docker-буферизации
+Версия: v5.3.0 (SRE 5.0 CANON COMPATIBLE — МАТРИЦА v1.2)
+Дата/Время стабилизации: 2026-05-30 16:00:00 UTC
 """
 
 import hashlib
@@ -78,15 +71,15 @@ class Harvester:
         max_cache_size: int = 10000,
         min_length: int = 20,
         max_length: int = 4000,
-        max_age_hours: int = 72  # Терапевтическое окно сбора до 3 суток
+        max_age_hours: int = 72  # Окно сбора до 3 суток
     ):
         self.max_cache_size = max_cache_size
         self.min_length = min_length
         self.max_length = max_length
         self.max_age_hours = max_age_hours
         
-        # SRE Канон: Файловый кэш в примонтированном Docker-томе логов
-        self.cache_file = Path("/app/logs/processed_hashes.uid")
+        # СИНХРОНИЗАЦИЯ ПУТИ: Строго в примонтированный том /opt/kraken/logs
+        self.cache_file = Path("/opt/kraken/logs/processed_hashes.uid")
         
         # Загружаем существующие хэши с диска
         self.processed_hashes, temp_queue = self._load_cache_from_disk()
@@ -158,21 +151,21 @@ class Harvester:
             sys.stdout.write(f"[{datetime.now().isoformat()}] ⚠️ Ошибка атомарной дозаписи хэша: {e}\n")
             sys.stdout.flush()
     
-    # ===== 4.4.3. ФИЛЬТРЫ =====
+    # ===== 4.4.3. СТРОГИЕ СЛУЖЕБНЫЕ ФИЛЬТРЫ =====
     
-    def filter_by_length(self, text: str) -> Tuple[bool, Optional[str]]:
+    def filter_by_length(self, text: str) -> Tuple[bool, Optional[RejectReason]]:
         if len(text) < self.min_length:
-            return (False, "TOO_SHORT")
+            return (False, RejectReason.SHORT_TEXT)
         if len(text) > self.max_length:
-            return (False, "TOO_LONG")
+            return (False, RejectReason.SHORT_TEXT)  # Маппинг на базовый лимит размера
         return (True, None)
     
-    def filter_by_date(self, msg_date: datetime) -> Tuple[bool, Optional[str]]:
+    def filter_by_date(self, msg_date: datetime) -> Tuple[bool, Optional[RejectReason]]:
         now = datetime.now()
         if msg_date.tzinfo:
             msg_date = msg_date.replace(tzinfo=None)
         if msg_date < now - timedelta(hours=self.max_age_hours):
-            return (False, "OLD_MESSAGE")
+            return (False, RejectReason.NO_DATA)  # Дроп по сроку давности (Устарело)
         return (True, None)
     
     # ===== 4.4.5. ПОЛНЫЙ ЦИКЛ ОБРАБОТКИ =====
@@ -201,7 +194,7 @@ class Harvester:
             if not ok:
                 continue
             
-            # Валидация пройдена! Только теперь фиксируем хэш
+            # Валидация пройдена! Только теперь фиксируем хэш перманентно
             self.mark_as_processed(h)
             
             sanitized = SanitizedMessage(
@@ -224,7 +217,8 @@ class Harvester:
         if len(self.processed_hashes) > initial_cache_size:
             self._sync_cache_to_disk()
             
-        sys.stdout.write(f"[{datetime.now().isoformat()}] 🧹 Harvester: {len(messages)} in → {len(result)} out (dedup={len(messages) - len(resultjoin:=None) if not result else len(messages) - len(result)})\n")
+        # СИНТАКСИЧЕСКИЙ ФИКС ЛОГГЕРА: Вырезали Шуриков опечаточный артефакт
+        sys.stdout.write(f"[{datetime.now().isoformat()}] 🧹 Harvester: {len(messages)} in → {len(result)} out (dedup={len(messages) - len(result)})\n")
         sys.stdout.flush()
         
         return result

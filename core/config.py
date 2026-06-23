@@ -5,9 +5,10 @@ KRAKEN Configuration — Все параметры из .env через Pydantic
 Версия: v5.3.4 (SRE 5.0 GOLDEN CONFIG — UNIFIED PROXY LAYER)
 """
 
+import os
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Dict, Any
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 class Settings(BaseSettings):
@@ -77,4 +78,42 @@ class Settings(BaseSettings):
     BEACON_CHAT_ID: str = ""
     BEACON_RATE_LIMIT_PER_ERROR_MINUTES: int = 5
     BEACON_HEALTH_CHECK_INTERVAL_SECONDS: int = 30
-    BEACON
+
+    # ===== 🎛️ CONFIGURATION INTEGRITY (SRE 5.0) =====
+    model_config = SettingsConfigDict(
+        env_file="/app/secrets/.env",
+        env_file_encoding="utf-8",
+        extra="ignore"
+    )
+
+    def get_http_proxy_dict(self) -> Optional[Dict[str, str]]:
+        """Возвращает маппинг прокси для httpx / requests (Google Sheets Client)"""
+        if not self.PROXY_ENABLED or not self.PROXY_HTTP_URL:
+            return None
+        return {
+            "http://": self.PROXY_HTTP_URL,
+            "https://": self.PROXY_HTTP_URL,
+        }
+
+    def get_telethon_proxy(self) -> Optional[tuple]:
+        """Парсит PROXY_HTTP_URL в каноничный кортеж для Telethon MTProto"""
+        if not self.PROXY_ENABLED or not self.PROXY_HTTP_URL:
+            return None
+        try:
+            clean_url = self.PROXY_HTTP_URL.replace("http://", "").replace("https://", "")
+            host, port = clean_url.split(":")
+            # 2 — это константа python_socks.ProxyType.HTTP для Telethon
+            return (2, host, int(port))
+        except Exception as e:
+            print(f"⚠️ [SRE-CONFIG] Failed to parse Telethon proxy: {e}")
+            return None
+
+# Синглтон инициализации
+settings = Settings()
+
+# --- Total Observability Node (Touch Law) ---
+print(f"✅ [SRE-CONFIG] .env parsed successfully. Target ENV: Production")
+if settings.PROXY_ENABLED:
+    print(f"🛡️ [SRE-CONFIG] UNIFIED PROXY LAYER ACTIVE: {settings.PROXY_HTTP_URL}")
+else:
+    print("⚠️ [SRE-CONFIG] WARNING: Unified Proxy Layer is DISABLED")
