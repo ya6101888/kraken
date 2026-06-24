@@ -3,8 +3,8 @@ KRAKEN Google Sheets Client — Запись сигналов в таблицы.
 
 Фаза 3: ИНТЕГРАЦИИ
 Модуль: 3.3 gsheets_client.py
-Версия: v5.4.5 (SRE 5.0 GOLDEN EDITION — FINAL DIAGNOSTIC)
-Дата изменения: 2026-06-23 20:00:00 UTC
+Версия: v5.4.6 (SRE 5.0 PROXY-AUTH FIX — CREDS.SESSION INJECTION)
+Дата изменения: 2026-06-24 06:45:00 UTC
 
 Принципы:
 - Авторизация через service_account.json
@@ -66,12 +66,13 @@ class GoogleSheetsClient:
         self.client = None
         self._init_client()
     
-    # ===== 3.3.1. АВТОРИЗАЦИЯ С ЯВНОЙ СЕССИЕЙ ПРОКСИ =====
+    # ===== 3.3.1. АВТОРИЗАЦИЯ С ЯВНОЙ СЕССИЕЙ ПРОКСИ (ИСПРАВЛЕНО v5.4.6) =====
     
     def _init_client(self):
         """
         Авторизуется через сервисный аккаунт Google.
         Внедряет прокси-слой через явную requests.Session.
+        ИСПРАВЛЕНИЕ: вызываем creds.authorize(session) перед передачей в gspread.
         """
         try:
             import gspread
@@ -82,13 +83,11 @@ class GoogleSheetsClient:
             if settings and settings.PROXY_ENABLED:
                 proxy_url = settings.HTTP_PROXY or settings.HTTPS_PROXY
                 if proxy_url:
-                    # Создаем сессию с прокси
                     session = requests.Session()
                     session.proxies = {
                         "http": proxy_url,
                         "https": proxy_url,
                     }
-                    # Для отладки
                     sys.stdout.write(f"🛡️ [SRE-NETWORK] Google Sheets using explicit proxy: {proxy_url}\n")
                     sys.stdout.flush()
                 else:
@@ -100,7 +99,7 @@ class GoogleSheetsClient:
                 sys.stdout.write("ℹ️ [SRE-NETWORK] Google Sheets using direct connection (no proxy)\n")
                 sys.stdout.flush()
 
-            # 2. Авторизация с сессией
+            # 2. Авторизация с явной инъекцией сессии в creds
             scope = [
                 "https://spreadsheets.google.com/feeds",
                 "https://www.googleapis.com/auth/drive"
@@ -111,7 +110,12 @@ class GoogleSheetsClient:
                 scope
             )
             
-            # Передаем сессию в authorize
+            # 🔥 ГЛАВНЫЙ ФИКС: привязываем сессию к credentials
+            # Без этого oauth2client использует дефолтный http и не видит прокси,
+            # а gspread получает 403 "Method doesn't allow unregistered callers"
+            creds.authorize(session)
+            
+            # Теперь передаём уже авторизованные creds и сессию
             self.client = gspread.authorize(creds, session=session)
             print(f"✅ Google Sheets authorized with explicit proxy session")
             
@@ -306,7 +310,6 @@ class BufferedWriter:
         if not self.buffer:
             return
         
-        # Тотальная наблюдаемость транзита данных в stdout хоста
         sys.stdout.write(f"📤 [SRE BUFFER] Педаль нажата! Выталкиваем {len(self.buffer)} сигналов строго по Матрице v2.1...\n")
         sys.stdout.flush()
         
@@ -329,7 +332,6 @@ class BufferedWriter:
                 pass
         
         for flat_row in self.buffer:
-            # Извлекаем метаданные по жестким индексам матрицы для логирования в DLQ
             entries.append({
                 "timestamp": datetime.now().isoformat(),
                 "signal_id": flat_row[0] if len(flat_row) > 0 else "UNKNOWN",
