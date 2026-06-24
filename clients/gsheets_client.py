@@ -3,13 +3,13 @@ KRAKEN Google Sheets Client — Запись сигналов в таблицы.
 
 Фаза 3: ИНТЕГРАЦИИ
 Модуль: 3.3 gsheets_client.py
-Версия: v5.4.6 (SRE 5.0 PROXY-AUTH FIX — CREDS.SESSION INJECTION)
-Дата изменения: 2026-06-24 06:45:00 UTC
+Версия: v5.4.7 (SRE 5.0 PROXY-AUTH FIX v2 — ENV PROXY, NO SESSION INJECTION)
+Дата изменения: 2026-06-24 07:00:00 UTC
 
 Принципы:
 - Авторизация через service_account.json
-- Явная сессия requests с прокси из core.config.settings
-- Тотальная маршрутизация через SRE Proxy
+- Прокси берётся из переменных окружения HTTP_PROXY/HTTPS_PROXY (заданы в Dockerfile)
+- Никаких ручных сессий — gspread/requests сами подхватывают прокси
 - Динамический размер буфера из core.config.settings
 - Retry: 3 попытки с exponential backoff
 - Прямой транзит канонического DTO v2.1 (25 колонок)
@@ -66,40 +66,18 @@ class GoogleSheetsClient:
         self.client = None
         self._init_client()
     
-    # ===== 3.3.1. АВТОРИЗАЦИЯ С ЯВНОЙ СЕССИЕЙ ПРОКСИ (ИСПРАВЛЕНО v5.4.6) =====
+    # ===== 3.3.1. АВТОРИЗАЦИЯ (ИСПРАВЛЕНО v5.4.7 — БЕЗ РУЧНОЙ СЕССИИ) =====
     
     def _init_client(self):
         """
         Авторизуется через сервисный аккаунт Google.
-        Внедряет прокси-слой через явную requests.Session.
-        ИСПРАВЛЕНИЕ: вызываем creds.authorize(session) перед передачей в gspread.
+        Прокси подхватывается автоматически из HTTP_PROXY/HTTPS_PROXY (заданы в Dockerfile).
+        Больше никаких ручных sessions и creds.authorize() — это ломало совместимость.
         """
         try:
             import gspread
             from oauth2client.service_account import ServiceAccountCredentials
-            import requests
 
-            # 1. Получаем настройки прокси
-            if settings and settings.PROXY_ENABLED:
-                proxy_url = settings.HTTP_PROXY or settings.HTTPS_PROXY
-                if proxy_url:
-                    session = requests.Session()
-                    session.proxies = {
-                        "http": proxy_url,
-                        "https": proxy_url,
-                    }
-                    sys.stdout.write(f"🛡️ [SRE-NETWORK] Google Sheets using explicit proxy: {proxy_url}\n")
-                    sys.stdout.flush()
-                else:
-                    session = requests.Session()
-                    sys.stdout.write("⚠️ [SRE-NETWORK] Proxy enabled but URL missing, using direct connection\n")
-                    sys.stdout.flush()
-            else:
-                session = requests.Session()
-                sys.stdout.write("ℹ️ [SRE-NETWORK] Google Sheets using direct connection (no proxy)\n")
-                sys.stdout.flush()
-
-            # 2. Авторизация с явной инъекцией сессии в creds
             scope = [
                 "https://spreadsheets.google.com/feeds",
                 "https://www.googleapis.com/auth/drive"
@@ -109,15 +87,9 @@ class GoogleSheetsClient:
                 self.service_account_path,
                 scope
             )
-            
-            # 🔥 ГЛАВНЫЙ ФИКС: привязываем сессию к credentials
-            # Без этого oauth2client использует дефолтный http и не видит прокси,
-            # а gspread получает 403 "Method doesn't allow unregistered callers"
-            creds.authorize(session)
-            
-            # Теперь передаём уже авторизованные creds и сессию
-            self.client = gspread.authorize(creds, session=session)
-            print(f"✅ Google Sheets authorized with explicit proxy session")
+            # gspread.authorize сам создаст requests.Session, которая увидит HTTP_PROXY
+            self.client = gspread.authorize(creds)
+            print(f"✅ Google Sheets authorized (proxy via environment)")
             
         except FileNotFoundError:
             print(f"⚠️ Service account file not found: {self.service_account_path}")
