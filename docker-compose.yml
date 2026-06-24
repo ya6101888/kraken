@@ -13,6 +13,7 @@ services:
       - /opt/kraken/core:/app/core
       - /opt/kraken/models:/app/models
       - /opt/kraken/main.py:/app/main.py
+      - /opt/kraken/clients:/app/clients          # ← ВОТ ЭТУ СТРОКУ ДОБАВЬ
       - /opt/kraken/secrets:/app/secrets:ro
       - /opt/kraken/sessions:/app/sessions
       - /opt/kraken/logs:/app/logs
